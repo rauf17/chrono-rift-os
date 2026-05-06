@@ -1,139 +1,97 @@
-// shared/shared_state.h
-// Shared memory layout for Chrono Rift.
-// This struct is placed in a POSIX shared memory segment created by the Arbiter.
-// All three processes map this same segment. All reads/writes must be protected
-// by the global_mutex semaphore (or the action_mutex for action fields only).
-
 #pragma once
+
 #include <semaphore.h>
 #include <cstdint>
 
-// ──────────────────────────────────────────────
-// Constants
-// ──────────────────────────────────────────────
+// This file defines the shared memory layout for the Chrono Rift game.
+// It contains the GlobalState struct that is placed in a POSIX shared memory segment.
+// The Arbiter process creates and initializes the shared memory.
+// The HIP process (human interface) reads game state and writes actions.
+// The ASP process (AI simulation) reads game state and simulates NPC actions.
+// All access to shared memory must be protected by global_mutex for general state
+// or action_mutex for action_buffer fields.
+// Semaphores must be initialized with sem_init(..., 1, ...) to enable PTHREAD_PROCESS_SHARED.
 
-constexpr int MAX_PLAYERS       = 4;
-constexpr int MAX_NPCS          = 9;
-constexpr int MAX_ENTITIES      = MAX_PLAYERS + MAX_NPCS;
-constexpr int INVENTORY_SLOTS   = 20;
-constexpr int LONG_TERM_SIZE    = 50;
-constexpr int ACTION_LOG_LINES  = 20;
-constexpr int ACTION_LOG_WIDTH  = 128;
-constexpr int MAX_ARTIFACTS     = 3;  // Solar Core, Lunar Blade, Eclipse Relic
-
-// ──────────────────────────────────────────────
-// Weapon definition (used by Partner B)
-// ──────────────────────────────────────────────
+const int MAX_PLAYERS = 4;
+const int MAX_NPCS = 9;
+const int MAX_ENTITIES = 13;
+const int INVENTORY_SLOTS = 20;
+const int LONG_TERM_SIZE = 50;
+const int ACTION_LOG_LINES = 20;
+const int ACTION_LOG_WIDTH = 128;
+const int MAX_ARTIFACTS = 3;
 
 struct Weapon {
-    char  name[32];       // Weapon name string
-    int   slot_size;      // Number of contiguous inventory slots it occupies
-    int   damage;         // Damage output value
-    bool  is_artifact;    // True for Solar Core and Lunar Blade
-    bool  occupied;       // True if this slot in the inventory array holds a weapon
+    char name[32];       // Weapon name - read by all, written by Partner B
+    int slot_size;       // Slots occupied - read by all, written by Partner B
+    int damage;          // Damage value - read by Arbiter, written by Partner B
+    bool is_artifact;    // Artifact flag - read by all, written by Partner B
+    bool occupied;       // Slot occupied - read by all, written by Partner B
 };
-
-// ──────────────────────────────────────────────
-// Artifact resource table entry (used by Partner B)
-// ──────────────────────────────────────────────
 
 struct ArtifactEntry {
-    char  name[32];       // Artifact name
-    bool  exists;         // False until Eclipse Relic is introduced at runtime
-    bool  is_free;        // True if no one currently holds this artifact
-    int   held_by;        // Entity index of the holder (-1 if free)
-    bool  waiting[MAX_ENTITIES]; // True for each entity that is waiting to acquire this artifact
+    char name[32];                // Artifact name - read by all, written by Partner B
+    bool exists;                  // Exists in game - read by all, written by Partner B
+    bool is_free;                 // Available to acquire - read by all, written by Partner B
+    int held_by;                  // Holding entity index - read by all, written by Partner B
+    bool waiting[MAX_ENTITIES];   // Waiting entities - read by all, written by Partner B
 };
-
-// ──────────────────────────────────────────────
-// Entity (player or NPC)
-// ──────────────────────────────────────────────
 
 struct Entity {
-    // Identity
-    char  name[32];
-    bool  is_player;      // True for human-controlled characters
-    bool  is_alive;
-
-    // Combat stats (initialized by Arbiter using roll number seed)
-    int   hp;
-    int   max_hp;
-    int   damage;
-    float speed;
-    float stamina;
-    float max_stamina;
-
-    // Turn control (written by Arbiter, read by HIP and ASP)
-    bool  is_my_turn;     // Arbiter sets this true when this entity should act
-    bool  action_ready;   // HIP/ASP sets this true after writing action fields below
-    bool  is_stunned;     // Partner B sets this true when stun mechanic is applied
-    long  stun_end_time;  // Unix timestamp when stun expires
-
-    // Inventory (managed by Partner B's space allocator)
-    Weapon inventory[INVENTORY_SLOTS];  // Primary 20-slot linear inventory
-    Weapon long_term[LONG_TERM_SIZE];   // Long-term storage for swapped-out weapons
-    int    long_term_count;             // Number of items currently in long-term storage
-
-    // Artifact holding (managed by Partner B)
-    bool   holds_solar_core;
-    bool   holds_lunar_blade;
-    bool   holds_eclipse_relic;
+    char name[32];                    // Entity name - read by all, written by Arbiter
+    bool is_player;                   // Player flag - read by all, written by Arbiter
+    bool is_alive;                    // Alive status - read by all, written by Arbiter
+    int hp;                           // Current HP - read by all, written by Arbiter
+    int max_hp;                       // Max HP - read by all, written by Arbiter
+    int damage;                       // Base damage - read by Arbiter, written by Arbiter
+    float speed;                      // Speed stat - read by Arbiter, written by Arbiter
+    float stamina;                    // Current stamina - read by all, written by Arbiter
+    float max_stamina;                // Max stamina - read by all, written by Arbiter
+    bool is_my_turn;                  // Turn flag - read by HIP/ASP, written by Arbiter
+    bool action_ready;                // Action ready - read by Arbiter, written by HIP/ASP
+    bool is_stunned;                  // Stunned status - read by Arbiter, written by Partner B
+    long stun_end_time;               // Stun end time - read by Arbiter, written by Partner B
+    Weapon inventory[INVENTORY_SLOTS]; // Inventory - read by all, written by Partner B
+    Weapon long_term[LONG_TERM_SIZE];  // Long-term storage - read by all, written by Partner B
+    int long_term_count;              // Long-term count - read by all, written by Partner B
+    bool holds_solar_core;            // Holds Solar Core - read by all, written by Partner B
+    bool holds_lunar_blade;           // Holds Lunar Blade - read by all, written by Partner B
+    bool holds_eclipse_relic;         // Holds Eclipse Relic - read by all, written by Partner B
 };
 
-// ──────────────────────────────────────────────
-// Action buffer (written by HIP/ASP, consumed by Arbiter)
-// ──────────────────────────────────────────────
-
 enum class ActionType : int {
-    NONE      = 0,
-    STRIKE    = 1,   // Attack: reduce target HP by actor damage
-    EXHAUST   = 2,   // Attack: reduce target Stamina by actor damage (player only)
-    USE_WEAPON= 3,   // Attack using equipped weapon
-    SWAP_IN   = 4,   // Bring weapon from long-term storage
-    HEAL      = 5,   // Restore 10% of own HP
-    SKIP      = 6,   // Stamina set to 50% instead of 0
-    ULTIMATE  = 7,   // Requires Solar Core + Lunar Blade (player only)
-    STUN      = 8,   // High-tier attack that triggers SIGUSR1 to ASP (player only)
-    QUIT      = 9    // Player chose to quit; HIP sends SIGTERM to Arbiter
+    NONE = 0,
+    STRIKE = 1,
+    EXHAUST = 2,
+    USE_WEAPON = 3,
+    SWAP_IN = 4,
+    HEAL = 5,
+    SKIP = 6,
+    ULTIMATE = 7,
+    STUN = 8,
+    QUIT = 9
 };
 
 struct ActionBuffer {
-    ActionType action;      // The chosen action type
-    int        actor_idx;   // Index into entities[] of the acting entity
-    int        target_idx;  // Index into entities[] of the target (-1 if no target)
-    int        weapon_slot; // Inventory slot index for USE_WEAPON or SWAP_IN (-1 otherwise)
+    ActionType action;  // Action type - read by Arbiter, written by HIP/ASP
+    int actor_idx;      // Actor index - read by Arbiter, written by HIP/ASP
+    int target_idx;     // Target index - read by Arbiter, written by HIP/ASP
+    int weapon_slot;    // Weapon slot - read by Arbiter, written by HIP/ASP
 };
 
-// ──────────────────────────────────────────────
-// Global state (the entire shared memory segment)
-// ──────────────────────────────────────────────
-
 struct GlobalState {
-    // Synchronization — must be initialized with PTHREAD_PROCESS_SHARED
-    sem_t  global_mutex;   // Protects all reads and writes to this struct
-    sem_t  action_mutex;   // Protects the action_buffer fields specifically
-
-    // Roll number seed (set once by Arbiter at startup)
-    int    roll_seed;
-
-    // Entity array — players first, then NPCs
-    int    player_count;   // 1 to 4 (chosen at startup)
-    int    npc_count;      // 2 to 9 (randomized using roll_seed)
-    Entity entities[MAX_ENTITIES];
-
-    // Action buffer — single pending action slot (serial execution)
-    ActionBuffer action_buffer;
-
-    // Game flow control (written by Arbiter)
-    bool   game_running;       // False when the game should exit
-    int    current_turn_idx;   // Index into entities[] of whose turn it is right now
-    int    enemies_killed;     // Counter toward the 10-kill win condition
-    bool   ultimate_active;    // True during the 10-second Ultimate Ability window
-
-    // Artifact resource table (Partner B fills this in)
-    ArtifactEntry artifacts[MAX_ARTIFACTS];
-
-    // Action log (circular buffer for the ncurses renderer)
-    char   log[ACTION_LOG_LINES][ACTION_LOG_WIDTH];
-    int    log_head;           // Index of the next line to write
+    sem_t global_mutex;              // Global mutex - used by all processes
+    sem_t action_mutex;              // Action mutex - used by all processes
+    int roll_seed;                   // Roll seed - read by Arbiter, written by Arbiter
+    int player_count;                // Player count - read by all, written by Arbiter
+    int npc_count;                   // NPC count - read by all, written by Arbiter
+    Entity entities[MAX_ENTITIES];   // Entities array - read by all, written by Arbiter/Partner B
+    ActionBuffer action_buffer;      // Action buffer - read by Arbiter, written by HIP/ASP
+    bool game_running;               // Game running - read by all, written by Arbiter
+    int current_turn_idx;            // Current turn - read by all, written by Arbiter
+    int enemies_killed;              // Enemies killed - read by all, written by Arbiter
+    bool ultimate_active;            // Ultimate active - read by all, written by Partner B
+    ArtifactEntry artifacts[MAX_ARTIFACTS]; // Artifacts - read by all, written by Partner B
+    char log[ACTION_LOG_LINES][ACTION_LOG_WIDTH]; // Action log - read by HIP, written by Arbiter
+    int log_head;                    // Log head - read by Arbiter/HIP, written by Arbiter
 };
