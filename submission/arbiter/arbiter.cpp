@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <semaphore.h>
 #include <signal.h>
@@ -15,6 +16,9 @@
 static GlobalState* g_state = nullptr;
 static pid_t g_hip_pid = -1;
 static pid_t g_asp_pid = -1;
+
+// Forward declaration for action commit logic implemented in the next prompt.
+void commitAction(GlobalState* state);
 
 // Helper function to append a message to the action log without locking.
 // Use this only when the caller already holds global_mutex.
@@ -227,6 +231,98 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
     std::memset(state->artifacts[2].waiting, 0, sizeof(state->artifacts[2].waiting));
 }
 
+// Main scheduling loop for stamina-driven entity turns.
+// Each second, all alive, non-stunned entities accumulate stamina.
+// When an entity reaches max_stamina, it is chosen to act.
+// The loop unlocks the shared state before waiting for action_ready,
+// allowing HIP or ASP to write the chosen action.
+void schedulingLoop(GlobalState* state) {
+    while (state->game_running) {
+        struct timespec ts = {1, 0};
+        // nanosleep is preferred over sleep(1) because sleep() can be interrupted by signals.
+        // Using nanosleep avoids interaction issues with SIGALRM later.
+        nanosleep(&ts, nullptr);
+
+        sem_wait(&state->global_mutex);
+
+        int total_entities = state->player_count + state->npc_count;
+        int actor_idx = -1;
+
+        for (int i = 0; i < total_entities; ++i) {
+            Entity& entity = state->entities[i];
+            if (!entity.is_alive || entity.is_stunned) {
+                continue;
+            }
+
+            entity.stamina += entity.speed;
+            if (entity.stamina > entity.max_stamina) {
+                entity.stamina = entity.max_stamina;
+            }
+
+            if (actor_idx == -1 && entity.stamina >= entity.max_stamina) {
+                actor_idx = i;
+            }
+        }
+
+        if (actor_idx == -1) {
+            sem_post(&state->global_mutex);
+            continue;
+        }
+
+        state->current_turn_idx = actor_idx;
+        Entity& actor = state->entities[actor_idx];
+        actor.is_my_turn = true;
+        actor.action_ready = false;
+
+        state->action_buffer.action = ActionType::NONE;
+        state->action_buffer.actor_idx = actor_idx;
+        state->action_buffer.target_idx = -1;
+        state->action_buffer.weapon_slot = -1;
+
+        sem_post(&state->global_mutex);
+
+        // Wait for the selected entity to set action_ready.
+        // We poll because the shared action_ready flag is a simple cross-process signal,
+        // and no blocking primitive exists for this shared-flag protocol yet.
+        if (actor.is_player) {
+            while (state->game_running) {
+                sem_wait(&state->global_mutex);
+                bool ready = state->entities[actor_idx].action_ready;
+                sem_post(&state->global_mutex);
+                if (ready) {
+                    break;
+                }
+                struct timespec wait_ts = {0, 100 * 1000 * 1000};
+                nanosleep(&wait_ts, nullptr);
+            }
+        } else {
+            int elapsed_checks = 0;
+            const int max_checks = 30; // 3 seconds at 100ms per poll
+            bool ready = false;
+            while (state->game_running && elapsed_checks < max_checks) {
+                sem_wait(&state->global_mutex);
+                ready = state->entities[actor_idx].action_ready;
+                sem_post(&state->global_mutex);
+                if (ready) {
+                    break;
+                }
+                struct timespec wait_ts = {0, 100 * 1000 * 1000};
+                nanosleep(&wait_ts, nullptr);
+                elapsed_checks++;
+            }
+            if (!ready && state->game_running) {
+                sem_wait(&state->global_mutex);
+                state->action_buffer.action = ActionType::SKIP;
+                state->action_buffer.actor_idx = actor_idx;
+                state->entities[actor_idx].action_ready = true;
+                sem_post(&state->global_mutex);
+            }
+        }
+
+        commitAction(state);
+    }
+}
+
 int main() {
     std::cout << "[arbiter] started" << std::endl;
 
@@ -266,11 +362,8 @@ int main() {
 
     std::cout << "[arbiter] Shared memory initialized." << std::endl;
 
-    // In a real implementation, the arbiter would now enter the scheduling loop.
-    // Keep the process alive until a SIGTERM causes cleanup.
-    while (state->game_running) {
-        sleep(1);
-    }
+    // Enter the stamina-based scheduling loop.
+    schedulingLoop(state);
 
     cleanupAndExit(state, hip_pid, asp_pid);
     return 0;
