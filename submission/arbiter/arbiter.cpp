@@ -1,22 +1,25 @@
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <semaphore.h>
-#include <signal.h>
-#include <ncurses.h>
+#include <ctime>
+#include <csignal>
 #include <cerrno>
 #include <cstdio>
+#include <atomic>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <semaphore.h>
+#include <pthread.h>
+#include <ncurses.h>
 #include "../shared/shared_state.h"
 
 static GlobalState* g_state = nullptr;
 static pid_t g_hip_pid = -1;
 static pid_t g_asp_pid = -1;
+static std::atomic_bool shutdown_requested{false};
 
 // Forward declaration for action commit logic implemented in the next prompt.
 void commitAction(GlobalState* state);
@@ -62,13 +65,13 @@ void cleanupAndExit(GlobalState* state, pid_t hip_pid, pid_t asp_pid) {
 }
 
 // SIGTERM handler for Arbiter.
-// Sets the game_running flag false and performs process cleanup.
+// Sets the shutdown flag and clears the game-running state.
 void arbiterSigtermHandler(int signum) {
     (void)signum;
+    shutdown_requested.store(true);
     if (g_state) {
         g_state->game_running = false;
     }
-    cleanupAndExit(g_state, g_hip_pid, g_asp_pid);
 }
 
 // Launch HIP and ASP child processes using fork and exec.
@@ -573,22 +576,36 @@ void commitAction(GlobalState* state) {
 }
 
 int main() {
-
-    int roll_number, player_count;
-    std::cout << "Enter roll number: ";
-    std::cin >> roll_number;
-    std::cout << "Enter number of players (1-4): ";
-    std::cin >> player_count;
-    if (player_count < 1 || player_count > 4) {
-        std::cerr << "Invalid player count. Must be between 1 and 4." << std::endl;
-        return 1;
-    }
+    std::cout << "Arbiter: Starting Chrono Rift..." << std::endl;
 
     GlobalState* state = createSharedMemory();
     initSemaphores(state);
+
+    int roll_number;
+    int player_count;
+    std::cout << "Enter your Roll Number (as integer): ";
+    std::cin >> roll_number;
+    std::cout << "Enter number of player characters (1-4): ";
+    std::cin >> player_count;
+    if (player_count < 1 || player_count > 4) {
+        std::cerr << "Invalid player count. Must be between 1 and 4." << std::endl;
+        cleanupAndExit(state, -1, -1);
+    }
+
     initEntities(state, roll_number, player_count);
+    appendLog(state, "Game initialized. Waiting for processes...");
 
     g_state = state;
+
+    struct sigaction sa{};
+    sa.sa_handler = arbiterSigtermHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGTERM, &sa, nullptr) == -1) {
+        perror("sigaction failed");
+        cleanupAndExit(state, -1, -1);
+    }
+    // Partner B may add SIGUSR1 and SIGALRM handlers here later.
 
     initscr();
     cbreak();
@@ -600,19 +617,10 @@ int main() {
     init_pair(3, COLOR_YELLOW, COLOR_BLACK);
     init_pair(4, COLOR_CYAN, COLOR_BLACK);
 
-    pthread_t render_thread;
-    if (pthread_create(&render_thread, nullptr, renderThread, state) != 0) {
+    pthread_t render_tid;
+    if (pthread_create(&render_tid, nullptr, renderThread, state) != 0) {
         perror("pthread_create render thread failed");
-        cleanupAndExit(state, g_hip_pid, g_asp_pid);
-    }
-
-    struct sigaction sa{};
-    sa.sa_handler = arbiterSigtermHandler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    if (sigaction(SIGTERM, &sa, nullptr) == -1) {
-        perror("sigaction failed");
-        cleanupAndExit(state, g_hip_pid, g_asp_pid);
+        cleanupAndExit(state, -1, -1);
     }
 
     pid_t hip_pid = -1;
@@ -621,15 +629,14 @@ int main() {
     g_hip_pid = hip_pid;
     g_asp_pid = asp_pid;
 
-    // For demonstration, append a log message
-    appendLog(state, "Arbiter initialized shared memory.");
-
-    std::cout << "[arbiter] Shared memory initialized." << std::endl;
+    sleep(1);
+    appendLog(state, "All processes online. Game starting.");
 
     // Enter the stamina-based scheduling loop.
     schedulingLoop(state);
 
-    pthread_join(render_thread, nullptr);
+    state->game_running = false;
+    pthread_join(render_tid, nullptr);
     cleanupAndExit(state, hip_pid, asp_pid);
     return 0;
 }
