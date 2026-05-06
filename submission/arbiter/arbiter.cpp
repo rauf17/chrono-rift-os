@@ -3,11 +3,18 @@
 #include <cstring>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <semaphore.h>
+#include <signal.h>
+#include <ncurses.h>
 #include <cerrno>
 #include <cstdio>
 #include "../shared/shared_state.h"
+
+static GlobalState* g_state = nullptr;
+static pid_t g_hip_pid = -1;
+static pid_t g_asp_pid = -1;
 
 // Helper function to append a message to the action log without locking.
 // Use this only when the caller already holds global_mutex.
@@ -26,6 +33,68 @@ void appendLog(GlobalState* state, const char* message) {
     sem_wait(&state->global_mutex);
     appendLogUnsafe(state, message);
     sem_post(&state->global_mutex);
+}
+
+// Cleanup helper that terminates child processes, destroys semaphores,
+// releases shared memory, unlinks the shared memory object, and exits.
+void cleanupAndExit(GlobalState* state, pid_t hip_pid, pid_t asp_pid) {
+    if (hip_pid > 0) {
+        kill(hip_pid, SIGTERM); // Terminate HIP gracefully
+        waitpid(hip_pid, nullptr, 0); // Reap HIP child process
+    }
+    if (asp_pid > 0) {
+        kill(asp_pid, SIGTERM); // Terminate ASP gracefully
+        waitpid(asp_pid, nullptr, 0); // Reap ASP child process
+    }
+
+    sem_destroy(&state->global_mutex); // Destroy process-shared semaphore
+    sem_destroy(&state->action_mutex);
+    munmap(state, sizeof(GlobalState)); // Unmap shared memory from address space
+    shm_unlink("/chrono_rift_shm"); // Remove the shared memory object
+    if (isendwin() == FALSE) endwin();
+    std::printf("Arbiter: Shutdown complete.\n");
+    exit(0);
+}
+
+// SIGTERM handler for Arbiter.
+// Sets the game_running flag false and performs process cleanup.
+void arbiterSigtermHandler(int signum) {
+    (void)signum;
+    if (g_state) {
+        g_state->game_running = false;
+    }
+    cleanupAndExit(g_state, g_hip_pid, g_asp_pid);
+}
+
+// Launch HIP and ASP child processes using fork and exec.
+// The parent sleeps briefly so children can attach to shared memory using shm_open/mmap.
+void launchProcesses(pid_t& hip_pid, pid_t& asp_pid) {
+    hip_pid = fork();
+    if (hip_pid < 0) {
+        perror("fork hip failed");
+        exit(1);
+    }
+    if (hip_pid == 0) {
+        execl("./hip/hip", "./hip/hip", nullptr);
+        perror("execl hip failed");
+        exit(1);
+    }
+
+    asp_pid = fork();
+    if (asp_pid < 0) {
+        perror("fork asp failed");
+        exit(1);
+    }
+    if (asp_pid == 0) {
+        execl("./asp/asp", "./asp/asp", nullptr);
+        perror("execl asp failed");
+        exit(1);
+    }
+
+    // Give child processes time to call shm_open and mmap before Arbiter starts modifying shared memory.
+    sleep(1);
+    std::printf("Arbiter: HIP launched with PID %d\n", hip_pid);
+    std::printf("Arbiter: ASP launched with PID %d\n", asp_pid);
 }
 
 // Creates the POSIX shared memory segment for the game state.
@@ -175,13 +244,34 @@ int main() {
     initSemaphores(state);
     initEntities(state, roll_number, player_count);
 
+    g_state = state;
+
+    struct sigaction sa{};
+    sa.sa_handler = arbiterSigtermHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGTERM, &sa, nullptr) == -1) {
+        perror("sigaction failed");
+        cleanupAndExit(state, g_hip_pid, g_asp_pid);
+    }
+
+    pid_t hip_pid = -1;
+    pid_t asp_pid = -1;
+    launchProcesses(hip_pid, asp_pid);
+    g_hip_pid = hip_pid;
+    g_asp_pid = asp_pid;
+
     // For demonstration, append a log message
     appendLog(state, "Arbiter initialized shared memory.");
 
     std::cout << "[arbiter] Shared memory initialized." << std::endl;
 
-    // In a real implementation, the arbiter would wait for other processes or handle game loop.
-    // For now, just exit after initialization.
+    // In a real implementation, the arbiter would now enter the scheduling loop.
+    // Keep the process alive until a SIGTERM causes cleanup.
+    while (state->game_running) {
+        sleep(1);
+    }
 
+    cleanupAndExit(state, hip_pid, asp_pid);
     return 0;
 }
