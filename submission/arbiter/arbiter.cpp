@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <semaphore.h>
 #include <signal.h>
 #include <ncurses.h>
@@ -347,6 +348,120 @@ void checkGameConditions(GlobalState* state) {
     }
 }
 
+// Rendering thread for ncurses display.
+// All ncurses calls happen in this single dedicated thread because ncurses is not thread-safe.
+// erase() + refresh() is the correct double-buffering pattern for ncurses.
+void* renderThread(void* arg) {
+    GlobalState* state = (GlobalState*)arg;
+    while (state->game_running) {
+        usleep(200000); // 200ms refresh rate
+
+        sem_wait(&state->global_mutex);
+        int player_count = state->player_count;
+        int npc_count = state->npc_count;
+        int total_entities = player_count + npc_count;
+
+        struct LocalEntity {
+            char name[32];
+            bool is_player;
+            bool is_alive;
+            bool is_my_turn;
+            bool is_stunned;
+            int hp;
+            int max_hp;
+            float stamina;
+            float max_stamina;
+        } entities[MAX_ENTITIES];
+
+        for (int i = 0; i < total_entities; ++i) {
+            std::memcpy(entities[i].name, state->entities[i].name, sizeof(entities[i].name));
+            entities[i].is_player = state->entities[i].is_player;
+            entities[i].is_alive = state->entities[i].is_alive;
+            entities[i].is_my_turn = state->entities[i].is_my_turn;
+            entities[i].is_stunned = state->entities[i].is_stunned;
+            entities[i].hp = state->entities[i].hp;
+            entities[i].max_hp = state->entities[i].max_hp;
+            entities[i].stamina = state->entities[i].stamina;
+            entities[i].max_stamina = state->entities[i].max_stamina;
+        }
+
+        int log_head = state->log_head;
+        char log_copy[ACTION_LOG_LINES][ACTION_LOG_WIDTH];
+        for (int i = 0; i < ACTION_LOG_LINES; ++i) {
+            std::memcpy(log_copy[i], state->log[i], ACTION_LOG_WIDTH);
+        }
+        sem_post(&state->global_mutex);
+
+        erase();
+        attron(COLOR_PAIR(4));
+        mvprintw(0, 0, "=== CHRONO RIFT ===");
+        attroff(COLOR_PAIR(4));
+
+        int row = 2;
+        for (int i = 0; i < total_entities; ++i) {
+            int hp_color = entities[i].is_player ? 1 : 2;
+            if (entities[i].is_stunned) {
+                hp_color = 2;
+            }
+
+            if (entities[i].is_my_turn) {
+                attron(A_BOLD);
+            }
+
+            attron(COLOR_PAIR(hp_color));
+            mvprintw(row, 0, "%s HP:%d/%d", entities[i].name, entities[i].hp, entities[i].max_hp);
+            attroff(COLOR_PAIR(hp_color));
+            if (entities[i].is_my_turn) {
+                attroff(A_BOLD);
+            }
+
+            int bar_x = 35;
+            int fill = 0;
+            if (entities[i].max_stamina > 0.0f) {
+                fill = (int)((entities[i].stamina / entities[i].max_stamina) * 20.0f + 0.5f);
+            }
+            if (fill < 0) fill = 0;
+            if (fill > 20) fill = 20;
+
+            attron(COLOR_PAIR(3));
+            mvprintw(row, bar_x, "[");
+            for (int j = 0; j < 20; ++j) {
+                mvprintw(row, bar_x + 1 + j, "%c", j < fill ? '#' : '-');
+            }
+            mvprintw(row, bar_x + 21, "] %2d%%", entities[i].max_stamina > 0.0f ? (int)((entities[i].stamina / entities[i].max_stamina) * 100.0f) : 0);
+            attroff(COLOR_PAIR(3));
+
+            if (entities[i].is_stunned) {
+                attron(COLOR_PAIR(2));
+                mvprintw(row, bar_x + 27, "(STUNNED)");
+                attroff(COLOR_PAIR(2));
+            }
+            row++;
+        }
+
+        row += 1;
+        mvprintw(row++, 0, "Action Log:");
+        int log_start = (log_head - 10 + ACTION_LOG_LINES) % ACTION_LOG_LINES;
+        for (int i = 0; i < 10; ++i) {
+            int idx = (log_start + i) % ACTION_LOG_LINES;
+            if (log_copy[idx][0] == '\0') {
+                continue;
+            }
+            attron(A_DIM);
+            mvprintw(row++, 0, "%s", log_copy[idx]);
+            attroff(A_DIM);
+        }
+
+        refresh();
+    }
+
+    // Clear the ncurses screen one final time when the game ends so the terminal is clean on exit.
+    erase();
+    refresh();
+
+    return nullptr;
+}
+
 void commitAction(GlobalState* state) {
     sem_wait(&state->global_mutex);
 
@@ -475,6 +590,22 @@ int main() {
 
     g_state = state;
 
+    initscr();
+    cbreak();
+    noecho();
+    curs_set(0);
+    start_color();
+    init_pair(1, COLOR_GREEN, COLOR_BLACK);
+    init_pair(2, COLOR_RED, COLOR_BLACK);
+    init_pair(3, COLOR_YELLOW, COLOR_BLACK);
+    init_pair(4, COLOR_CYAN, COLOR_BLACK);
+
+    pthread_t render_thread;
+    if (pthread_create(&render_thread, nullptr, renderThread, state) != 0) {
+        perror("pthread_create render thread failed");
+        cleanupAndExit(state, g_hip_pid, g_asp_pid);
+    }
+
     struct sigaction sa{};
     sa.sa_handler = arbiterSigtermHandler;
     sigemptyset(&sa.sa_mask);
@@ -498,6 +629,7 @@ int main() {
     // Enter the stamina-based scheduling loop.
     schedulingLoop(state);
 
+    pthread_join(render_thread, nullptr);
     cleanupAndExit(state, hip_pid, asp_pid);
     return 0;
 }
