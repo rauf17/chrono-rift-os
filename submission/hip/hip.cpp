@@ -120,23 +120,33 @@ void* playerThread(void* arg) {
         }
 
         if (action == ActionType::STRIKE || action == ActionType::EXHAUST) {
-            sem_wait(&state->global_mutex);
-            std::printf("Choose target index:\n");
-            int total_entities = state->player_count + state->npc_count;
-            for (int i = 0; i < total_entities; ++i) {
-                if (i == player_idx) {
+            target_idx = -1;
+            while (target_idx < 0) {
+                sem_wait(&state->global_mutex);
+                std::printf("Choose target (alive enemy):\n");
+                int total_entities = state->player_count + state->npc_count;
+                for (int i = 0; i < total_entities; ++i) {
+                    if (!state->entities[i].is_player && state->entities[i].is_alive) {
+                        std::printf("  [%d] %s HP=%d\n", i, state->entities[i].name,
+                                    state->entities[i].hp);
+                    }
+                }
+                sem_post(&state->global_mutex);
+                std::printf("> ");
+                if (!readLine(input, sizeof(input))) {
                     continue;
                 }
-                std::printf("  [%d] %s HP=%d %s\n", i, state->entities[i].name,
-                            state->entities[i].hp,
-                            state->entities[i].is_alive ? "alive" : "dead");
+                int target_choice = std::atoi(input);
+
+                sem_wait(&state->global_mutex);
+                if (target_choice >= 0 && target_choice < total_entities &&
+                    !state->entities[target_choice].is_player && state->entities[target_choice].is_alive) {
+                    target_idx = target_choice;
+                } else {
+                    std::printf("Invalid target. Choose an enemy.\n");
+                }
+                sem_post(&state->global_mutex);
             }
-            sem_post(&state->global_mutex);
-            std::printf("> ");
-            if (!readLine(input, sizeof(input))) {
-                continue;
-            }
-            target_idx = std::atoi(input);
         }
 
         sem_wait(&state->action_mutex);
