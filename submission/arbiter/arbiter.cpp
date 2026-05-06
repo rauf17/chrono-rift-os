@@ -323,8 +323,141 @@ void schedulingLoop(GlobalState* state) {
     }
 }
 
+// Applies the selected action to the game state, logs the result, and checks endgame conditions.
+// This function assumes the action has already been selected and action_ready is true.
+// It locks global_mutex for the entire commit phase to keep state updates atomic.
+void checkGameConditions(GlobalState* state) {
+    int alive_players = 0;
+    int total_entities = state->player_count + state->npc_count;
+    for (int i = 0; i < total_entities; ++i) {
+        if (state->entities[i].is_player && state->entities[i].is_alive) {
+            alive_players++;
+        }
+    }
+
+    if (alive_players == 0) {
+        appendLogUnsafe(state, "Game Over -- all players defeated");
+        state->game_running = false;
+        return;
+    }
+
+    if (state->enemies_killed >= 10) {
+        appendLogUnsafe(state, "Victory -- 10 enemies defeated!");
+        state->game_running = false;
+    }
+}
+
+void commitAction(GlobalState* state) {
+    sem_wait(&state->global_mutex);
+
+    ActionBuffer action = state->action_buffer;
+    int actor_idx = action.actor_idx;
+    char msg[128] = {0};
+
+    if (actor_idx < 0 || actor_idx >= state->player_count + state->npc_count) {
+        appendLogUnsafe(state, "Invalid action actor index; ignoring action.");
+        state->action_buffer.action = ActionType::NONE;
+        sem_post(&state->global_mutex);
+        return;
+    }
+
+    Entity* actor = &state->entities[actor_idx];
+    switch (action.action) {
+        case ActionType::STRIKE: {
+            int target_idx = action.target_idx;
+            if (target_idx < 0 || target_idx >= state->player_count + state->npc_count) {
+                appendLogUnsafe(state, "Strike action had invalid target index.");
+                break;
+            }
+            Entity* target = &state->entities[target_idx];
+            target->hp -= actor->damage;
+            if (target->hp <= 0) {
+                target->hp = 0;
+                target->is_alive = false;
+                if (!target->is_player) {
+                    state->enemies_killed++;
+                }
+            }
+            std::snprintf(msg, sizeof(msg), "%s used Strike on %s for %d damage", actor->name, target->name, actor->damage);
+            appendLogUnsafe(state, msg);
+            actor->stamina = 0.0f;
+            break;
+        }
+        case ActionType::EXHAUST: {
+            int target_idx = action.target_idx;
+            if (target_idx < 0 || target_idx >= state->player_count + state->npc_count) {
+                appendLogUnsafe(state, "Exhaust action had invalid target index.");
+                break;
+            }
+            Entity* target = &state->entities[target_idx];
+            target->stamina -= actor->damage;
+            if (target->stamina < 0.0f) {
+                target->stamina = 0.0f;
+            }
+            std::snprintf(msg, sizeof(msg), "%s used Exhaust on %s", actor->name, target->name);
+            appendLogUnsafe(state, msg);
+            actor->stamina = 0.0f;
+            break;
+        }
+        case ActionType::HEAL: {
+            int heal_amount = (int)(actor->max_hp * 0.10f);
+            actor->hp += heal_amount;
+            if (actor->hp > actor->max_hp) {
+                actor->hp = actor->max_hp;
+            }
+            std::snprintf(msg, sizeof(msg), "%s healed for %d HP", actor->name, heal_amount);
+            appendLogUnsafe(state, msg);
+            actor->stamina = 0.0f;
+            break;
+        }
+        case ActionType::SKIP: {
+            actor->stamina = actor->max_stamina * 0.50f;
+            std::snprintf(msg, sizeof(msg), "%s skipped their turn", actor->name);
+            appendLogUnsafe(state, msg);
+            break;
+        }
+        case ActionType::USE_WEAPON:
+            std::snprintf(msg, sizeof(msg), "%s used Use Weapon -- Partner B to implement", actor->name);
+            appendLogUnsafe(state, msg);
+            actor->stamina = 0.0f;
+            // TODO: Partner B implements this
+            break;
+        case ActionType::SWAP_IN:
+            std::snprintf(msg, sizeof(msg), "%s used Swap In -- Partner B to implement", actor->name);
+            appendLogUnsafe(state, msg);
+            actor->stamina = 0.0f;
+            // TODO: Partner B implements this
+            break;
+        case ActionType::ULTIMATE:
+            std::snprintf(msg, sizeof(msg), "%s used Ultimate -- Partner B to implement", actor->name);
+            appendLogUnsafe(state, msg);
+            actor->stamina = 0.0f;
+            // TODO: Partner B implements this
+            break;
+        case ActionType::STUN:
+            std::snprintf(msg, sizeof(msg), "%s used Stun -- Partner B to implement", actor->name);
+            appendLogUnsafe(state, msg);
+            actor->stamina = 0.0f;
+            // TODO: Partner B implements this
+            break;
+        case ActionType::QUIT:
+            appendLogUnsafe(state, "Player chose to quit. Shutting down.");
+            state->game_running = false;
+            break;
+        case ActionType::NONE:
+        default:
+            appendLogUnsafe(state, "No action to commit.");
+            break;
+    }
+
+    actor->is_my_turn = false;
+    state->action_buffer.action = ActionType::NONE;
+
+    checkGameConditions(state);
+    sem_post(&state->global_mutex);
+}
+
 int main() {
-    std::cout << "[arbiter] started" << std::endl;
 
     int roll_number, player_count;
     std::cout << "Enter roll number: ";
