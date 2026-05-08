@@ -15,11 +15,15 @@
 #include <pthread.h>
 #include <ncurses.h>
 #include "../shared/shared_state.h"
+#include "arbiter/inventory.h"
+#include "arbiter/artifact_manager.h"
 
 static GlobalState* g_state = nullptr;
 static pid_t g_hip_pid = -1;
 static pid_t g_asp_pid = -1;
 static std::atomic_bool shutdown_requested{false};
+static std::atomic_bool ultimate_window_ended{false};
+static const char kUltimateEndedMsg[] = "Ultimate window has ended.";
 
 // Forward declaration for action commit logic implemented in the next prompt.
 void commitAction(GlobalState* state);
@@ -58,7 +62,17 @@ void cleanupAndExit(GlobalState* state, pid_t hip_pid, pid_t asp_pid) {
     sem_destroy(&state->global_mutex); // Destroy process-shared semaphore
     sem_destroy(&state->action_mutex);
     munmap(state, sizeof(GlobalState)); // Unmap shared memory from address space
-    shm_unlink("/chrono_rift_shm"); // Remove the shared memory object
+    if (shm_unlink("/chrono_rift_shm") == -1) { // Remove the shared memory object
+        perror("shm_unlink failed");
+    }
+    int verify_fd = shm_open("/chrono_rift_shm", O_RDONLY, 0);
+    if (verify_fd != -1) {
+        close(verify_fd);
+        std::fprintf(stderr, "Arbiter: shm_unlink verification failed; retrying.\n");
+        if (shm_unlink("/chrono_rift_shm") == -1) {
+            perror("shm_unlink retry failed");
+        }
+    }
     if (isendwin() == FALSE) endwin();
     std::printf("Arbiter: Shutdown complete.\n");
     exit(0);
@@ -73,6 +87,48 @@ void arbiterSigtermHandler(int signum) {
         g_state->game_running = false;
     }
 }
+
+void handleSIGALRM(int signum) {
+    (void)signum;
+    if (g_asp_pid > 0) {
+        kill(g_asp_pid, SIGCONT);
+    }
+    ultimate_window_ended.store(true);
+}
+
+static int artifactIndexFromName(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    if (std::strcmp(name, "Solar Core") == 0) {
+        return 0;
+    }
+    if (std::strcmp(name, "Lunar Blade") == 0) {
+        return 1;
+    }
+    if (std::strcmp(name, "Eclipse Relic") == 0) {
+        return 2;
+    }
+    return -1;
+}
+
+static void captureArtifactPresence(const Entity* entity, bool presence[MAX_ARTIFACTS]) {
+    presence[0] = false;
+    presence[1] = false;
+    presence[2] = false;
+
+    for (int i = 0; i < INVENTORY_SLOTS; ++i) {
+        const Weapon& slot = entity->inventory[i];
+        if (!slot.occupied || slot.name[0] == '\0') {
+            continue;
+        }
+        int idx = artifactIndexFromName(slot.name);
+        if (idx >= 0) {
+            presence[idx] = true;
+        }
+    }
+}
+
 
 // Launch HIP and ASP child processes using fork and exec.
 // The parent sleeps briefly so children can attach to shared memory using shm_open/mmap.
@@ -241,7 +297,7 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
 // The loop unlocks the shared state before waiting for action_ready,
 // allowing HIP or ASP to write the chosen action.
 void schedulingLoop(GlobalState* state) {
-    while (state->game_running) {
+    while (state->game_running && !shutdown_requested.load()) {
         struct timespec ts = {1, 0};
         // nanosleep is preferred over sleep(1) because sleep() can be interrupted by signals.
         // Using nanosleep avoids interaction issues with SIGALRM later.
@@ -465,8 +521,162 @@ void* renderThread(void* arg) {
     return nullptr;
 }
 
+void* deadlockMonitorThread(void* arg) {
+    GlobalState* state = (GlobalState*)arg;
+    while (state->game_running) {
+        struct timespec ts = {1, 0};
+        nanosleep(&ts, nullptr);
+
+        int resolve_entity = -1;
+        int resolve_artifact = -1;
+
+        sem_wait(&state->global_mutex);
+
+        {
+            char debug_msg[ACTION_LOG_WIDTH] = {0};
+            int written = std::snprintf(debug_msg, sizeof(debug_msg), "Artifacts:");
+            for (int i = 0; i < MAX_ARTIFACTS; ++i) {
+                ArtifactEntry& artifact = state->artifacts[i];
+                if (!artifact.exists) {
+                    continue;
+                }
+
+                char wait_buf[64] = {0};
+                int wait_written = 0;
+                for (int e = 0; e < state->player_count + state->npc_count; ++e) {
+                    if (artifact.waiting[e]) {
+                        int add = std::snprintf(wait_buf + wait_written,
+                                                sizeof(wait_buf) - (size_t)wait_written,
+                                                "%s%d",
+                                                wait_written == 0 ? "" : ",",
+                                                e);
+                        if (add < 0 || (size_t)wait_written + (size_t)add >= sizeof(wait_buf)) {
+                            break;
+                        }
+                        wait_written += add;
+                    }
+                }
+                if (wait_written == 0) {
+                    std::snprintf(wait_buf, sizeof(wait_buf), "-");
+                }
+
+                if (written < (int)sizeof(debug_msg)) {
+                    written += std::snprintf(debug_msg + written,
+                                             sizeof(debug_msg) - (size_t)written,
+                                             " A%d(h=%d f=%d w=%s)",
+                                             i,
+                                             artifact.held_by,
+                                             artifact.is_free ? 1 : 0,
+                                             wait_buf);
+                }
+            }
+            appendLogUnsafe(state, debug_msg);
+        }
+
+        bool resolved = false;
+        for (int a = 0; a < MAX_ARTIFACTS && !resolved; ++a) {
+            ArtifactEntry& artifact_a = state->artifacts[a];
+            if (artifact_a.held_by < 0 || artifact_a.is_free) {
+                continue;
+            }
+            int holder_x = artifact_a.held_by;
+
+            for (int b = 0; b < MAX_ARTIFACTS; ++b) {
+                if (b == a) {
+                    continue;
+                }
+                ArtifactEntry& artifact_b = state->artifacts[b];
+                if (artifact_b.held_by < 0 || artifact_b.is_free) {
+                    continue;
+                }
+                if (!artifact_b.waiting[holder_x]) {
+                    continue;
+                }
+
+                int holder_y = artifact_b.held_by;
+                if (!artifact_a.waiting[holder_y]) {
+                    continue;
+                }
+
+                resolve_entity = (holder_x < holder_y) ? holder_x : holder_y;
+                resolve_artifact = (resolve_entity == holder_x) ? a : b;
+
+                char msg[128];
+                std::snprintf(msg, sizeof(msg), "Deadlock resolved: entity %d released %s", resolve_entity,
+                              state->artifacts[resolve_artifact].name);
+                appendLogUnsafe(state, msg);
+
+                resolved = true;
+                break;
+            }
+        }
+        sem_post(&state->global_mutex);
+
+        if (resolved && resolve_entity >= 0 && resolve_artifact >= 0) {
+            releaseArtifact(state, resolve_entity, resolve_artifact);
+        }
+    }
+
+    return nullptr;
+}
+
 void commitAction(GlobalState* state) {
+    static const Weapon kDropWeapons[] = {
+        {"Solar Core", 10, 95, true, false},
+        {"Lunar Blade", 10, 90, true, false},
+        {"Iron Halberd", 7, 55, false, false},
+        {"Venom Dagger", 4, 30, false, false},
+        {"Thunderstaff", 6, 50, false, false},
+        {"Obsidian Axe", 5, 45, false, false},
+        {"Frostbow", 6, 48, false, false},
+        {"Splinter Stick", 2, 12, false, false}
+    };
+    static bool pending_drop_exists = false;
+    static Weapon pending_drop_weapon{};
+    static int pending_drop_for_player = -1;
+
+    int acquire_count = 0;
+    int acquire_entity[8];
+    int acquire_artifact[8];
+    int release_count = 0;
+    int release_entity[8];
+    int release_artifact[8];
+
+    auto recordAcquire = [&](int entity_idx, const Weapon& weapon) {
+        if (!weapon.is_artifact) {
+            return;
+        }
+        int idx = artifactIndexFromName(weapon.name);
+        if (idx < 0) {
+            return;
+        }
+        if (acquire_count < 8) {
+            acquire_entity[acquire_count] = entity_idx;
+            acquire_artifact[acquire_count] = idx;
+            acquire_count++;
+        }
+    };
+
+    auto recordReleaseDiff = [&](int entity_idx, const bool before[MAX_ARTIFACTS], const bool after[MAX_ARTIFACTS]) {
+        for (int i = 0; i < MAX_ARTIFACTS; ++i) {
+            if (before[i] && !after[i]) {
+                if (release_count < 8) {
+                    release_entity[release_count] = entity_idx;
+                    release_artifact[release_count] = i;
+                    release_count++;
+                }
+            }
+        }
+    };
+
     sem_wait(&state->global_mutex);
+
+    if (ultimate_window_ended.exchange(false)) {
+        state->ultimate_active = false;
+        appendLogUnsafe(state, kUltimateEndedMsg);
+    }
+
+    bool introduce_relic = false;
 
     ActionBuffer action = state->action_buffer;
     int actor_idx = action.actor_idx;
@@ -494,6 +704,14 @@ void commitAction(GlobalState* state) {
                 target->is_alive = false;
                 if (!target->is_player) {
                     state->enemies_killed++;
+                    if (rand() % 2 == 0) {
+                        Weapon dropped = kDropWeapons[rand() % 8];
+                        pending_drop_weapon = dropped;
+                        pending_drop_for_player = actor_idx;
+                        pending_drop_exists = true;
+                        std::snprintf(msg, sizeof(msg), "Weapon dropped: %s (for actor %d)", pending_drop_weapon.name, pending_drop_for_player);
+                        appendLogUnsafe(state, msg);
+                    }
                 }
             }
             std::snprintf(msg, sizeof(msg), "%s used Strike on %s for %d damage", actor->name, target->name, actor->damage);
@@ -529,35 +747,161 @@ void commitAction(GlobalState* state) {
             break;
         }
         case ActionType::SKIP: {
+            if (pending_drop_exists && actor_idx == pending_drop_for_player) {
+                int npc_indices[MAX_NPCS];
+                int npc_count = 0;
+                int start = state->player_count;
+                int end = state->player_count + state->npc_count;
+                for (int i = start; i < end; ++i) {
+                    if (state->entities[i].is_alive) {
+                        npc_indices[npc_count++] = i;
+                    }
+                }
+
+                if (npc_count > 0) {
+                    static unsigned int drop_seed = 0;
+                    if (drop_seed == 0) {
+                        drop_seed = (unsigned int)time(nullptr) ^ (unsigned int)getpid();
+                        if (drop_seed == 0) {
+                            drop_seed = 1;
+                        }
+                    }
+                    int npc_idx = npc_indices[rand_r(&drop_seed) % npc_count];
+                    acquireWeapon(&state->entities[npc_idx], pending_drop_weapon);
+                    std::snprintf(msg, sizeof(msg), "%s picked up %s", state->entities[npc_idx].name, pending_drop_weapon.name);
+                    appendLogUnsafe(state, msg);
+                } else {
+                    appendLogUnsafe(state, "No NPC available to claim the dropped weapon.");
+                }
+                pending_drop_exists = false;
+                pending_drop_for_player = -1;
+            }
             actor->stamina = actor->max_stamina * 0.50f;
             std::snprintf(msg, sizeof(msg), "%s skipped their turn", actor->name);
             appendLogUnsafe(state, msg);
             break;
         }
         case ActionType::USE_WEAPON:
-            std::snprintf(msg, sizeof(msg), "%s used Use Weapon -- Partner B to implement", actor->name);
-            appendLogUnsafe(state, msg);
+            if (action.weapon_slot == -2) {
+                if (!pending_drop_exists) {
+                    appendLogUnsafe(state, "No pending weapon drop to pick up.");
+                    break;
+                }
+                bool before[MAX_ARTIFACTS];
+                bool after[MAX_ARTIFACTS];
+                captureArtifactPresence(actor, before);
+                acquireWeapon(actor, pending_drop_weapon);
+                captureArtifactPresence(actor, after);
+                recordReleaseDiff(actor_idx, before, after);
+                recordAcquire(actor_idx, pending_drop_weapon);
+                std::snprintf(msg, sizeof(msg), "%s picked up %s", actor->name, pending_drop_weapon.name);
+                appendLogUnsafe(state, msg);
+                pending_drop_exists = false;
+                pending_drop_for_player = -1;
+                actor->stamina = 0.0f;
+                break;
+            }
+
+            if (action.weapon_slot < 0 || action.weapon_slot >= INVENTORY_SLOTS) {
+                appendLogUnsafe(state, "Use Weapon had invalid inventory index.");
+                break;
+            }
+
+            if (!actor->inventory[action.weapon_slot].occupied || actor->inventory[action.weapon_slot].name[0] == '\0') {
+                appendLogUnsafe(state, "Use Weapon failed: empty inventory slot.");
+                break;
+            }
+
+            if (action.target_idx < 0 || action.target_idx >= state->player_count + state->npc_count) {
+                appendLogUnsafe(state, "Use Weapon had invalid target index.");
+                break;
+            }
+
+            {
+                Entity* target = &state->entities[action.target_idx];
+                Weapon weapon = actor->inventory[action.weapon_slot];
+                target->hp -= weapon.damage;
+                if (target->hp <= 0) {
+                    target->hp = 0;
+                    target->is_alive = false;
+                    if (!target->is_player) {
+                        state->enemies_killed++;
+                    }
+                }
+                std::snprintf(msg, sizeof(msg), "%s used %s on %s for %d damage", actor->name, weapon.name, target->name, weapon.damage);
+                appendLogUnsafe(state, msg);
+            }
             actor->stamina = 0.0f;
-            // TODO: Partner B implements this
             break;
         case ActionType::SWAP_IN:
-            std::snprintf(msg, sizeof(msg), "%s used Swap In -- Partner B to implement", actor->name);
-            appendLogUnsafe(state, msg);
-            actor->stamina = 0.0f;
-            // TODO: Partner B implements this
+            if (actor->long_term_count <= 0) {
+                appendLogUnsafe(state, "Swap In failed: long-term storage is empty.");
+                break;
+            }
+
+            if (action.weapon_slot < 0 || action.weapon_slot >= actor->long_term_count) {
+                appendLogUnsafe(state, "Swap In failed: invalid long-term index.");
+                break;
+            }
+
+            {
+                Weapon weapon = actor->long_term[action.weapon_slot];
+                for (int i = action.weapon_slot; i < actor->long_term_count - 1; ++i) {
+                    actor->long_term[i] = actor->long_term[i + 1];
+                }
+                actor->long_term_count--;
+                bool before[MAX_ARTIFACTS];
+                bool after[MAX_ARTIFACTS];
+                captureArtifactPresence(actor, before);
+                acquireWeapon(actor, weapon);
+                captureArtifactPresence(actor, after);
+                recordReleaseDiff(actor_idx, before, after);
+                recordAcquire(actor_idx, weapon);
+                std::snprintf(msg, sizeof(msg), "%s swapped in %s", actor->name, weapon.name);
+                appendLogUnsafe(state, msg);
+                actor->stamina = 0.0f;
+            }
             break;
         case ActionType::ULTIMATE:
-            std::snprintf(msg, sizeof(msg), "%s used Ultimate -- Partner B to implement", actor->name);
+            if (state->ultimate_active) {
+                appendLogUnsafe(state, "Ultimate is already active.");
+                break;
+            }
+            if (!actor->holds_solar_core || !actor->holds_lunar_blade) {
+                appendLogUnsafe(state, "Ultimate failed: missing required artifacts.");
+                break;
+            }
+            std::snprintf(msg, sizeof(msg), "%s activated Ultimate Ability", actor->name);
             appendLogUnsafe(state, msg);
+            state->ultimate_active = true;
+            if (g_asp_pid > 0) {
+                kill(g_asp_pid, SIGSTOP);
+            }
+            alarm(10);
             actor->stamina = 0.0f;
-            // TODO: Partner B implements this
             break;
         case ActionType::STUN:
-            std::snprintf(msg, sizeof(msg), "%s used Stun -- Partner B to implement", actor->name);
+        {
+            int target_idx = action.target_idx;
+            if (target_idx < state->player_count || target_idx >= state->player_count + state->npc_count) {
+                appendLogUnsafe(state, "Stun action had invalid target index.");
+                break;
+            }
+            Entity* target = &state->entities[target_idx];
+            if (!target->is_alive) {
+                appendLogUnsafe(state, "Stun action had a dead target.");
+                break;
+            }
+            target->is_stunned = true;
+            target->stun_end_time = time(nullptr) + 3;
+            std::snprintf(msg, sizeof(msg), "%s stunned %s", actor->name, target->name);
             appendLogUnsafe(state, msg);
+            if (g_asp_pid > 0) {
+                kill(g_asp_pid, SIGUSR1);
+            }
             actor->stamina = 0.0f;
-            // TODO: Partner B implements this
             break;
+        }
         case ActionType::QUIT:
             appendLogUnsafe(state, "Player chose to quit. Shutting down.");
             state->game_running = false;
@@ -571,8 +915,24 @@ void commitAction(GlobalState* state) {
     actor->is_my_turn = false;
     state->action_buffer.action = ActionType::NONE;
 
+    if (state->enemies_killed == 5 && !state->artifacts[2].exists) {
+        introduce_relic = true;
+    }
+
     checkGameConditions(state);
     sem_post(&state->global_mutex);
+
+    for (int i = 0; i < release_count; ++i) {
+        releaseArtifact(state, release_entity[i], release_artifact[i]);
+    }
+
+    for (int i = 0; i < acquire_count; ++i) {
+        tryAcquireArtifact(state, acquire_entity[i], acquire_artifact[i]);
+    }
+
+    if (introduce_relic) {
+        introduceEclipseRelic(state);
+    }
 }
 
 int main() {
@@ -606,6 +966,14 @@ int main() {
         cleanupAndExit(state, -1, -1);
     }
     // Partner B may add SIGUSR1 and SIGALRM handlers here later.
+    struct sigaction sa_alrm{};
+    sa_alrm.sa_handler = handleSIGALRM;
+    sigemptyset(&sa_alrm.sa_mask);
+    sa_alrm.sa_flags = 0;
+    if (sigaction(SIGALRM, &sa_alrm, nullptr) == -1) {
+        perror("sigaction SIGALRM failed");
+        cleanupAndExit(state, -1, -1);
+    }
 
     initscr();
     cbreak();
@@ -623,6 +991,12 @@ int main() {
         cleanupAndExit(state, -1, -1);
     }
 
+    pthread_t deadlock_tid;
+    if (pthread_create(&deadlock_tid, nullptr, deadlockMonitorThread, state) != 0) {
+        perror("pthread_create deadlock monitor failed");
+        cleanupAndExit(state, -1, -1);
+    }
+
     pid_t hip_pid = -1;
     pid_t asp_pid = -1;
     launchProcesses(hip_pid, asp_pid);
@@ -637,6 +1011,7 @@ int main() {
 
     state->game_running = false;
     pthread_join(render_tid, nullptr);
+    pthread_join(deadlock_tid, nullptr);
     cleanupAndExit(state, hip_pid, asp_pid);
     return 0;
 }
