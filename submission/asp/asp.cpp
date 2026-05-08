@@ -11,12 +11,55 @@
 #include <cstdio>
 #include <cerrno>
 #include <ctime>
+#include <csignal>
 #include "../shared/shared_state.h"
 
 // The ASP spawns one thread per NPC. This is a hard requirement of the spec.
 // Running all NPC decisions sequentially inside a single thread would violate
 // the concurrency requirement and receive zero marks for that section.
 static GlobalState* g_state = nullptr;
+static volatile sig_atomic_t stun_signal_received = 0;
+
+void handleSIGUSR1(int signum) {
+    (void)signum;
+    stun_signal_received = 1;
+}
+
+void* stunWatcherThread(void* arg) {
+    (void)arg;
+    while (g_state && g_state->game_running) {
+        if (!stun_signal_received) {
+            struct timespec poll_ts = {0, 50 * 1000 * 1000};
+            nanosleep(&poll_ts, nullptr);
+            continue;
+        }
+
+        stun_signal_received = 0;
+
+        int target_idx = -1;
+        sem_wait(&g_state->global_mutex);
+        int player_count = g_state->player_count;
+        int npc_count = g_state->npc_count;
+        for (int i = player_count; i < player_count + npc_count; ++i) {
+            if (g_state->entities[i].is_my_turn) {
+                target_idx = i;
+                g_state->entities[i].is_stunned = true;
+                break;
+            }
+        }
+        sem_post(&g_state->global_mutex);
+
+        if (target_idx >= 0) {
+            struct timespec ts = {3, 0};
+            nanosleep(&ts, nullptr);
+            sem_wait(&g_state->global_mutex);
+            g_state->entities[target_idx].is_stunned = false;
+            sem_post(&g_state->global_mutex);
+        }
+    }
+
+    return nullptr;
+}
 
 // Attach to the existing shared memory segment created by Arbiter.
 // Both HIP and ASP use the same shared memory name so Arbiter can talk to both
@@ -44,7 +87,7 @@ void* npcThread(void* arg) {
     int npc_idx = *(int*)arg;
     GlobalState* state = g_state;
 
-    srand((unsigned int)time(nullptr) ^ (unsigned int)npc_idx); // Per-thread RNG seed avoids rand() data races.
+    unsigned int thread_seed = (unsigned int)time(nullptr) ^ (unsigned int)npc_idx;
 
     while (state->game_running) {
         usleep(100000); // Poll every 100ms for this NPC's turn
@@ -52,7 +95,12 @@ void* npcThread(void* arg) {
         // Avoid data races on is_my_turn by reading it under the global mutex.
         sem_wait(&state->global_mutex);
         bool my_turn = state->entities[npc_idx].is_my_turn;
+        bool is_stunned = state->entities[npc_idx].is_stunned;
         sem_post(&state->global_mutex);
+        if (is_stunned) {
+            usleep(100000);
+            continue;
+        }
         if (!my_turn) {
             continue;
         }
@@ -77,7 +125,7 @@ void* npcThread(void* arg) {
         }
 
         if (alive_player_count > 0) {
-            if (rand() % 10 < 8) {
+            if (rand_r(&thread_seed) % 10 < 8) {
                 chosen_action = ActionType::STRIKE;
             } else {
                 chosen_action = ActionType::SKIP;
@@ -108,10 +156,25 @@ int main() {
     g_state = attachSharedMemory();
     srand((unsigned int)time(nullptr));
 
+    struct sigaction sa{};
+    sa.sa_handler = handleSIGUSR1;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGUSR1, &sa, nullptr) == -1) {
+        perror("sigaction SIGUSR1 failed");
+        exit(1);
+    }
+
     usleep(500000); // Wait 500ms for Arbiter initialization
 
     int player_count = g_state->player_count;
     int npc_count = g_state->npc_count;
+
+    pthread_t stun_tid;
+    if (pthread_create(&stun_tid, nullptr, stunWatcherThread, nullptr) != 0) {
+        perror("pthread_create stun watcher failed");
+        exit(1);
+    }
 
     std::vector<pthread_t> threads(npc_count);
     std::vector<int> npc_indices(npc_count);
@@ -131,6 +194,8 @@ int main() {
     for (int i = 0; i < npc_count; ++i) {
         pthread_join(threads[i], nullptr);
     }
+
+    pthread_join(stun_tid, nullptr);
 
     munmap(g_state, sizeof(GlobalState));
     std::printf("ASP: exiting\n");
