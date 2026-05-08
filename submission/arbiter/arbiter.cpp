@@ -404,8 +404,8 @@ void checkGameConditions(GlobalState* state) {
         return;
     }
 
-    if (state->enemies_killed >= 10) {
-        appendLogUnsafe(state, "Victory -- 10 enemies defeated!");
+    if (state->enemies_killed >= state->npc_count) {
+        appendLogUnsafe(state, "Victory -- all enemies defeated!");
         state->game_running = false;
     }
 }
