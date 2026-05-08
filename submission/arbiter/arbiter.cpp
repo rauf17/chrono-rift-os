@@ -17,6 +17,9 @@
 #include "../shared/shared_state.h"
 #include "arbiter/inventory.h"
 #include "arbiter/artifact_manager.h"
+#ifndef NO_SFML
+#include "../renderer/renderer.h"
+#endif
 
 static GlobalState* g_state = nullptr;
 static pid_t g_hip_pid = -1;
@@ -24,6 +27,7 @@ static pid_t g_asp_pid = -1;
 static std::atomic_bool shutdown_requested{false};
 static std::atomic_bool ultimate_window_ended{false};
 static const char kUltimateEndedMsg[] = "Ultimate window has ended.";
+static bool g_tui_mode = false;
 
 // Forward declaration for action commit logic implemented in the next prompt.
 void commitAction(GlobalState* state);
@@ -73,7 +77,7 @@ void cleanupAndExit(GlobalState* state, pid_t hip_pid, pid_t asp_pid) {
             perror("shm_unlink retry failed");
         }
     }
-    if (isendwin() == FALSE) endwin();
+    if (g_tui_mode && isendwin() == FALSE) endwin();
     std::printf("Arbiter: Shutdown complete.\n");
     exit(0);
 }
@@ -524,6 +528,22 @@ void* renderThread(void* arg) {
     return nullptr;
 }
 
+void* renderThreadSFML(void* arg) {
+    GlobalState* state = (GlobalState*)arg;
+    Renderer renderer("../assets", "Chrono Rift");
+    while (state->game_running) {
+        RenderSnapshot snap = captureSnapshot(state);
+        if (!renderer.pollEvents()) {
+            state->game_running = false;
+            break;
+        }
+        renderer.render(snap);
+        usleep(16000);
+    }
+    renderer.close();
+    return nullptr;
+}
+
 void* deadlockMonitorThread(void* arg) {
     GlobalState* state = (GlobalState*)arg;
     while (state->game_running) {
@@ -920,6 +940,10 @@ int main() {
         cleanupAndExit(state, -1, -1);
     }
 
+    std::cout << "Choose display mode: 1) TUI (ncurses)  2) GUI (SFML): ";
+    int display_mode;
+    std::cin >> display_mode;
+
     initEntities(state, roll_number, player_count);
     appendLog(state, "Game initialized. Waiting for processes...");
 
@@ -943,21 +967,21 @@ int main() {
         cleanupAndExit(state, -1, -1);
     }
 
-    // initscr();
-    // cbreak();
-    // noecho();
-    // curs_set(0);
-    // start_color();
-    // init_pair(1, COLOR_GREEN, COLOR_BLACK);
-    // init_pair(2, COLOR_RED, COLOR_BLACK);
-    // init_pair(3, COLOR_YELLOW, COLOR_BLACK);
-    // init_pair(4, COLOR_CYAN, COLOR_BLACK);
-
-    // pthread_t render_tid;
-    // if (pthread_create(&render_tid, nullptr, renderThread, state) != 0) {
-    //     perror("pthread_create render thread failed");
-    //     cleanupAndExit(state, -1, -1);
-    // }
+    pthread_t render_tid;
+    if (display_mode == 2) {
+        // SFML path — do NOT init ncurses
+        g_tui_mode = false;
+        pthread_create(&render_tid, nullptr, renderThreadSFML, state);
+    } else {
+        // TUI path — init ncurses exactly as it was before
+        g_tui_mode = true;
+        initscr(); cbreak(); noecho(); curs_set(0); start_color();
+        init_pair(1, COLOR_GREEN, COLOR_BLACK);
+        init_pair(2, COLOR_RED, COLOR_BLACK);
+        init_pair(3, COLOR_YELLOW, COLOR_BLACK);
+        init_pair(4, COLOR_CYAN, COLOR_BLACK);
+        pthread_create(&render_tid, nullptr, renderThread, state);
+    }
 
     pthread_t deadlock_tid;
     if (pthread_create(&deadlock_tid, nullptr, deadlockMonitorThread, state) != 0) {
@@ -978,7 +1002,7 @@ int main() {
     schedulingLoop(state);
 
     state->game_running = false;
-    // pthread_join(render_tid, nullptr);
+    pthread_join(render_tid, nullptr);
     pthread_join(deadlock_tid, nullptr);
     cleanupAndExit(state, hip_pid, asp_pid);
     return 0;

@@ -1,9 +1,9 @@
 # Compiler and flags
 CXX = g++
 CXXFLAGS = -Wall -Wextra -std=c++17 -pthread -I.
-LIBS = -lncurses -lrt
+LIBS = -lsfml-graphics -lsfml-window -lsfml-system -lncurses -lrt
 
-ARBITER_SRCS = $(wildcard arbiter/*.cpp)
+ARBITER_SRCS = $(wildcard arbiter/*.cpp) $(wildcard renderer/*.cpp)
 HIP_SRCS = $(wildcard hip/*.cpp)
 ASP_SRCS = $(wildcard asp/*.cpp)
 
@@ -16,11 +16,11 @@ arbiter/arbiter: $(ARBITER_SRCS)
 
 # Compile hip executable from its source
 hip/hip: $(HIP_SRCS)
-	$(CXX) $(CXXFLAGS) -o hip/hip $(HIP_SRCS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o hip/hip $(HIP_SRCS) -lpthread -lrt
 
 # Compile asp executable from its source
 asp/asp: $(ASP_SRCS)
-	$(CXX) $(CXXFLAGS) -o asp/asp $(ASP_SRCS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o asp/asp $(ASP_SRCS) -lpthread -lrt
 
 # Clean target removes all executables
 clean:
