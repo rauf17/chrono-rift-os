@@ -1,7 +1,3 @@
-// renderer.cpp  –  Partner A
-// Implements: window management, background, entity rows, HP/stamina bars,
-//             status icons, action log panel, ultimate overlay.
-
 #include "renderer.h"
 #include <cmath>
 #include <cstring>
@@ -10,18 +6,18 @@
 #include <semaphore.h>
 
 // ---------------------------------------------------------------------------
-// captureSnapshot – call from the render/game thread, locks global_mutex once
+// captureSnapshot
 // ---------------------------------------------------------------------------
 RenderSnapshot captureSnapshot(GlobalState* state) {
     RenderSnapshot snap{};
     sem_wait(&state->global_mutex);
 
-    snap.player_count   = state->player_count;
-    snap.npc_count      = state->npc_count;
-    snap.game_running   = state->game_running;
-    snap.ultimate_active = state->ultimate_active;
+    snap.player_count     = state->player_count;
+    snap.npc_count        = state->npc_count;
+    snap.game_running     = state->game_running;
+    snap.ultimate_active  = state->ultimate_active;
     snap.current_turn_idx = state->current_turn_idx;
-    snap.log_head       = state->log_head;
+    snap.log_head         = state->log_head;
 
     for (int i = 0; i < ACTION_LOG_LINES; ++i)
         std::memcpy(snap.log[i], state->log[i], ACTION_LOG_WIDTH);
@@ -31,19 +27,28 @@ RenderSnapshot captureSnapshot(GlobalState* state) {
         const Entity& src = state->entities[i];
         auto& dst = snap.entities[i];
         std::strncpy(dst.name, src.name, 32);
-        dst.is_player    = src.is_player;
-        dst.is_alive     = src.is_alive;
-        dst.is_my_turn   = src.is_my_turn;
-        dst.is_stunned   = src.is_stunned;
-        dst.hp           = src.hp;
-        dst.max_hp       = src.max_hp;
-        dst.stamina      = src.stamina;
-        dst.max_stamina  = src.max_stamina;
+        dst.is_player         = src.is_player;
+        dst.is_alive          = src.is_alive;
+        dst.is_my_turn        = src.is_my_turn;
+        dst.is_stunned        = src.is_stunned;
+        dst.hp                = src.hp;
+        dst.max_hp            = src.max_hp;
+        dst.stamina           = src.stamina;
+        dst.max_stamina       = src.max_stamina;
+        dst.long_term_count   = src.long_term_count;
+        dst.holds_solar_core  = src.holds_solar_core;
+        dst.holds_lunar_blade = src.holds_lunar_blade;
         for (int s = 0; s < INVENTORY_SLOTS; ++s) {
             std::strncpy(dst.inventory[s].name, src.inventory[s].name, 32);
             dst.inventory[s].occupied    = src.inventory[s].occupied;
             dst.inventory[s].slot_size   = src.inventory[s].slot_size;
             dst.inventory[s].is_artifact = src.inventory[s].is_artifact;
+        }
+        for (int s = 0; s < LONG_TERM_SIZE; ++s) {
+            std::strncpy(dst.long_term[s].name, src.long_term[s].name, 32);
+            dst.long_term[s].occupied    = src.long_term[s].occupied;
+            dst.long_term[s].slot_size   = src.long_term[s].slot_size;
+            dst.long_term[s].is_artifact = src.long_term[s].is_artifact;
         }
     }
 
@@ -52,144 +57,288 @@ RenderSnapshot captureSnapshot(GlobalState* state) {
 }
 
 // ---------------------------------------------------------------------------
-// Color palette  (Chrono Rift dark-fantasy theme)
+// Colour palette
 // ---------------------------------------------------------------------------
-namespace Color {
-    static const sf::Color BG_PANEL    {10,  12,  20,  210}; // near-black, translucent
-    static const sf::Color BG_PANEL2   {18,  22,  38,  230}; // slightly lighter panel
-    static const sf::Color BORDER      {80,  60,  30,  255}; // aged gold border
-    static const sf::Color PLAYER_NAME {200, 230, 255, 255}; // icy blue
-    static const sf::Color ENEMY_NAME  {255, 160, 100, 255}; // ember orange
-    static const sf::Color DEAD_NAME   {90,  90,  90,  200}; // greyed-out
-    static const sf::Color HP_FULL     {200,  40,  40,  255}; // crimson
-    static const sf::Color HP_LOW      {255, 120,   0,  255}; // orange (< 30 %)
-    static const sf::Color HP_BG       {40,  10,  10,  200};
-    static const sf::Color STAM_FULL   {230, 190,  30,  255}; // gold
-    static const sf::Color STAM_BG     {40,  35,   5,  200};
-    static const sf::Color TURN_HL     {255, 230, 100,  35}; // row highlight
-    static const sf::Color LOG_BG      {8,   10,  18,  220};
-    static const sf::Color LOG_TEXT    {180, 200, 220, 220};
-    static const sf::Color LOG_HEAD    {220, 200, 100, 255}; // "Action Log" label
-    static const sf::Color ULTIMATE    {255, 200,  50, 200}; // golden pulse overlay
-    static const sf::Color STUN_CLR    {180, 255, 100, 255}; // acid-green STUNNED text
+namespace C {
+    static const sf::Color PANEL_DARK  {10,  12,  22,  220};
+    static const sf::Color PANEL_MID   {20,  24,  44,  230};
+    static const sf::Color BORDER_GOLD {110, 80,  30,  255};
+    static const sf::Color PLAYER_BG   {20,  40,  70,  200};
+    static const sf::Color ENEMY_BG    {60,  20,  20,  200};
+    static const sf::Color PLAYER_NAME {180, 220, 255, 255};
+    static const sf::Color ENEMY_NAME  {255, 150, 90,  255};
+    static const sf::Color DEAD_COL    {80,  80,  80,  160};
+    static const sf::Color HP_HIGH     {200, 40,  40,  255};
+    static const sf::Color HP_LOW      {255, 120, 0,   255};
+    static const sf::Color HP_BG       {35,  10,  10,  200};
+    static const sf::Color STAM_COL    {220, 185, 30,  255};
+    static const sf::Color STAM_BG     {40,  35,  5,   200};
+    static const sf::Color BTN_NORMAL  {30,  40,  65,  230};
+    static const sf::Color BTN_HOVER   {60,  80,  130, 255};
+    static const sf::Color BTN_DISABLE {25,  25,  25,  160};
+    static const sf::Color BTN_TEXT    {210, 230, 255, 255};
+    static const sf::Color STUN_COL    {160, 255, 90,  255};
     static const sf::Color WHITE       {255, 255, 255, 255};
+    static const sf::Color MENU_BG     {12,  16,  30,  240};
 }
 
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
-Renderer::Renderer(const std::string& assets_path, const std::string& window_title)
-    : m_sprites(assets_path + "/sprites/sprites.png")
+Renderer::Renderer(const std::string& assets_path,
+                   const std::string& window_title)
+    : m_sprites(assets_path + "/sprites/sprite.png")
 {
-    // Window: 1280×720, vsync on
     m_window.create(sf::VideoMode(1280, 720), window_title,
                     sf::Style::Titlebar | sf::Style::Close);
     m_window.setVerticalSyncEnabled(true);
     m_window.setFramerateLimit(60);
+    m_win_w = 1280.f;
+    m_win_h = 720.f;
 
-    m_win_w = static_cast<float>(m_window.getSize().x);
-    m_win_h = static_cast<float>(m_window.getSize().y);
-
-    // ---- Load background texture ----------------------------------------
-    std::string bg_path = assets_path + "/backgrounds/dungeon.png";
-    if (!m_bg_texture.loadFromFile(bg_path)) {
-        // fallback: solid dark colour – draw nothing special
-    }
-    m_bg_texture.setRepeated(false);
+    if (!m_bg_texture.loadFromFile(assets_path + "/backgrounds/dungeon.png"))
+        std::fprintf(stderr, "Renderer: background not found\n");
+    m_bg_texture.setSmooth(false);
     m_bg_sprite.setTexture(m_bg_texture);
-
-    // Scale background to fill window while keeping aspect ratio
-    sf::Vector2u tex_sz = m_bg_texture.getSize();
-    if (tex_sz.x > 0 && tex_sz.y > 0) {
-        float sx = m_win_w  / static_cast<float>(tex_sz.x);
-        float sy = m_win_h  / static_cast<float>(tex_sz.y);
-        float sc = std::max(sx, sy);
+    sf::Vector2u tsz = m_bg_texture.getSize();
+    if (tsz.x > 0 && tsz.y > 0) {
+        float sc = std::max(m_win_w / tsz.x, m_win_h / tsz.y);
         m_bg_sprite.setScale(sc, sc);
-        // Centre it
-        float off_x = (m_win_w  - tex_sz.x * sc) / 2.f;
-        float off_y = (m_win_h  - tex_sz.y * sc) / 2.f;
-        m_bg_sprite.setPosition(off_x, off_y);
+        m_bg_sprite.setPosition((m_win_w - tsz.x * sc) / 2.f,
+                                 (m_win_h - tsz.y * sc) / 2.f);
     }
 
-    // ---- Load font ---------------------------------------------------------
-    std::string font_path = assets_path + "/fonts/BlazeCircuit.ttf";
-    if (!m_font.loadFromFile(font_path)) {
-        // try fallback name as shipped
-        m_font.loadFromFile(assets_path + "/fonts/BlazeCircuitRegular.ttf");
-    }
+    if (!m_font.loadFromFile(assets_path + "/fonts/BlazeCircuitRegular.ttf"))
+        std::fprintf(stderr, "Renderer: font not found\n");
     m_text.setFont(m_font);
 
-    // ---- Layout ------------------------------------------------------------
-    // Left panel: entity list  (55 % of width)
-    // Right panel: action log  (44 % of width, small gap in between)
-    m_entity_panel_x = 12.f;
-    m_entity_panel_w = m_win_w * 0.54f;
-
-    m_log_panel_x = m_entity_panel_x + m_entity_panel_w + 8.f;
-    m_log_panel_y = 40.f;
-    m_log_panel_w = m_win_w - m_log_panel_x - 12.f;
-    m_log_panel_h = m_win_h - m_log_panel_y - 12.f;
-
-    m_row_height = 48.f;
-    m_font_size_normal = 16u;
-    m_font_size_small  = 12u;
+    m_anims.fill(EntityAnim{});
+    m_entity_pos.fill({0.f, 0.f});
+    m_clock.restart();
 }
 
 // ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
 bool Renderer::isOpen() const { return m_window.isOpen(); }
+void Renderer::close()        { m_window.close(); }
 
 bool Renderer::pollEvents() {
-    sf::Event event{};
-    while (m_window.pollEvent(event)) {
-        if (event.type == sf::Event::Closed) {
-            m_window.close();
-            return false;
-        }
+    handleMouseMove(sf::Vector2f(sf::Mouse::getPosition(m_window)));
+    sf::Event ev{};
+    while (m_window.pollEvent(ev)) {
+        if (ev.type == sf::Event::Closed) { m_window.close(); return false; }
+        if (ev.type == sf::Event::MouseMoved)
+            handleMouseMove({(float)ev.mouseMove.x, (float)ev.mouseMove.y});
+        if (ev.type == sf::Event::MouseButtonReleased &&
+            ev.mouseButton.button == sf::Mouse::Left)
+            handleMouseClick({(float)ev.mouseButton.x,
+                               (float)ev.mouseButton.y}, m_cached_snap);
     }
     return true;
 }
 
-void Renderer::close() { m_window.close(); }
+bool Renderer::pollGuiAction(GuiAction& out) {
+    if (!m_pending_gui_action.ready) return false;
+    out = m_pending_gui_action;
+    m_pending_gui_action = GuiAction{};
+    return true;
+}
+
+void Renderer::setPlayerTurn(int player_idx, const RenderSnapshot& snap) {
+    m_active_player = player_idx;
+    m_cached_snap   = snap;
+    if (player_idx >= 0) {
+        m_phase = InputPhase::ACTION_MENU;
+        buildActionButtons(snap.entities[player_idx]);
+    } else {
+        m_phase = InputPhase::NONE;
+        m_action_buttons.clear();
+        m_target_buttons.clear();
+        m_inventory_buttons.clear();
+        m_longterm_buttons.clear();
+    }
+}
 
 // ---------------------------------------------------------------------------
-// render() – main per-frame entry point
+// Animation triggers
+// ---------------------------------------------------------------------------
+void Renderer::triggerAttackAnim(int attacker_idx, int target_idx) {
+    if (attacker_idx < 0 || attacker_idx >= MAX_ENTITIES) return;
+    if (target_idx   < 0 || target_idx   >= MAX_ENTITIES) return;
+
+    sf::Vector2f from = m_entity_pos[attacker_idx];
+    sf::Vector2f to   = m_entity_pos[target_idx];
+    float dx    = to.x - from.x;
+    float slide = std::min(std::abs(dx) * 0.4f, 80.f);
+    slide = (dx > 0.f) ? slide : -slide;
+
+    auto& a = m_anims[attacker_idx];
+    a.attacking     = true;
+    a.attack_dx     = 0.f;
+    a.attack_target = slide;
+    a.attack_t      = 0.f;
+    a.attack_return = false;
+}
+
+void Renderer::triggerWeaponFloat(int attacker_idx, int target_idx,
+                                   const char* weapon_name)
+{
+    if (attacker_idx < 0 || attacker_idx >= MAX_ENTITIES) return;
+    if (target_idx   < 0 || target_idx   >= MAX_ENTITIES) return;
+    if (!weapon_name || weapon_name[0] == '\0') return;
+
+    auto& a = m_anims[attacker_idx];
+    a.weapon_float        = true;
+    a.weapon_float_target = target_idx;
+    a.weapon_float_t      = 0.f;
+    std::strncpy(a.weapon_float_name, weapon_name,
+                 sizeof(a.weapon_float_name) - 1);
+    a.weapon_float_name[sizeof(a.weapon_float_name) - 1] = '\0';
+}
+
+void Renderer::triggerHitFlash(int target_idx) {
+    if (target_idx < 0 || target_idx >= MAX_ENTITIES) return;
+    m_anims[target_idx].hit_flash   = true;
+    m_anims[target_idx].hit_flash_t = 1.f;
+}
+
+void Renderer::triggerStunFlash(int target_idx) {
+    if (target_idx < 0 || target_idx >= MAX_ENTITIES) return;
+    auto& a = m_anims[target_idx];
+    a.stun_flash   = true;
+    a.stun_flash_t = 0.f;
+    a.stun_flashes = 3;   // 3 visible flashes
+}
+
+void Renderer::triggerDeath(int entity_idx) {
+    if (entity_idx < 0 || entity_idx >= MAX_ENTITIES) return;
+    // dead_confirmed is set in render() when is_alive flips to false
+    // nothing extra needed here; kept for API completeness
+}
+
+// ---------------------------------------------------------------------------
+// stepAnimations
+// ---------------------------------------------------------------------------
+void Renderer::stepAnimations(float dt) {
+    const float ATTACK_SPD  = 4.f;   // full slide in ~0.25 s
+    const float FLASH_SPD   = 3.5f;
+    const float STUN_SPD    = 6.f;   // each flash cycle ~0.17 s → 3 flashes ~0.5 s
+    const float PULSE_SPD   = 2.2f;
+    const float DEATH_SPD   = 80.f;  // alpha units per second
+
+    for (int i = 0; i < MAX_ENTITIES; ++i) {
+        auto& a = m_anims[i];
+
+        // ---- attack slide ------------------------------------------------
+        if (a.attacking) {
+            a.attack_t += dt * ATTACK_SPD;
+            if (!a.attack_return) {
+                float t    = std::min(a.attack_t, 1.f);
+                a.attack_dx = a.attack_target * t;
+                if (a.attack_t >= 1.f) {
+                    a.attack_return = true;
+                    a.attack_t      = 0.f;
+                }
+            } else {
+                float t    = std::min(a.attack_t, 1.f);
+                a.attack_dx = a.attack_target * (1.f - t);
+                if (a.attack_t >= 1.f) {
+                    a.attacking     = false;
+                    a.attack_dx     = 0.f;
+                    a.attack_return = false;
+                    a.attack_t      = 0.f;
+                }
+            }
+
+            // ---- weapon float follows the forward phase ------------------
+            if (a.weapon_float) {
+                if (!a.attack_return) {
+                    // advance float from 0 to 1 while going forward
+                    a.weapon_float_t = std::min(a.attack_t, 1.f);
+                } else {
+                    // hide on return
+                    a.weapon_float   = false;
+                    a.weapon_float_t = 0.f;
+                }
+            }
+        } else {
+            // If attack ended but float somehow still on, clear it
+            if (a.weapon_float) {
+                a.weapon_float   = false;
+                a.weapon_float_t = 0.f;
+            }
+        }
+
+        // ---- hit flash ---------------------------------------------------
+        if (a.hit_flash) {
+            a.hit_flash_t -= dt * FLASH_SPD;
+            if (a.hit_flash_t <= 0.f) {
+                a.hit_flash_t = 0.f;
+                a.hit_flash   = false;
+            }
+        }
+
+        // ---- stun flash burst --------------------------------------------
+        if (a.stun_flash && a.stun_flashes > 0) {
+            a.stun_flash_t += dt * STUN_SPD;
+            if (a.stun_flash_t >= 1.f) {
+                a.stun_flash_t = 0.f;
+                a.stun_flashes--;
+                if (a.stun_flashes <= 0) {
+                    a.stun_flash   = false;
+                    a.stun_flash_t = 0.f;
+                }
+            }
+        }
+
+        // ---- death fade --------------------------------------------------
+        if (a.dead_confirmed && a.death_alpha > 0.f) {
+            a.death_alpha -= dt * DEATH_SPD;
+            if (a.death_alpha < 0.f) a.death_alpha = 0.f;
+        }
+
+        // ---- turn pulse --------------------------------------------------
+        a.pulse_t += dt * PULSE_SPD;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// render  – main per-frame entry point
 // ---------------------------------------------------------------------------
 void Renderer::render(const RenderSnapshot& snap) {
-    m_window.clear(sf::Color(8, 10, 20));
+    m_cached_snap = snap;
 
-    // 1. Background
-    drawBackground();
+    float dt = m_clock.restart().asSeconds();
+    // Clamp dt to avoid huge jumps if the window was minimised etc.
+    if (dt > 0.1f) dt = 0.1f;
+    stepAnimations(dt);
 
-    // 2. Entity panel backdrop
-    drawPanelBackground(m_entity_panel_x - 4.f, 36.f,
-                        m_entity_panel_w + 8.f,
-                        m_win_h - 48.f,
-                        Color::BG_PANEL);
-
-    // 3. Header label
-    m_text.setFont(m_font);
-    m_text.setCharacterSize(22u);
-    m_text.setFillColor(Color::BORDER);
-    m_text.setString("CHRONO  RIFT");
-    m_text.setPosition(m_entity_panel_x + 4.f, 10.f);
-    m_window.draw(m_text);
-
-    // 4. Entity rows
+    // Mark newly-dead entities so their fade starts
     int total = snap.player_count + snap.npc_count;
-    float row_y = 50.f;
-    for (int i = 0; i < total && i < MAX_ENTITIES; ++i) {
-        bool hl = snap.entities[i].is_my_turn;
-        drawEntityRow(snap.entities[i], i, row_y, hl);
-        row_y += m_row_height;
+    for (int i = 0; i < total; ++i) {
+        if (!snap.entities[i].is_alive && !m_anims[i].dead_confirmed) {
+            m_anims[i].dead_confirmed = true;
+            m_anims[i].death_alpha    = 255.f;
+        }
+        if (!snap.entities[i].is_my_turn)
+            m_anims[i].pulse_t = 0.f;
     }
 
-    // 5. Action log panel
-    drawActionLog(snap);
+    m_window.clear(sf::Color(8, 10, 20));
+    drawBackground();
+    drawBattlefield(snap);
 
-    // 6. Ultimate overlay (on top of everything)
-    if (snap.ultimate_active)
-        drawUltimateOverlay();
+    // Floating weapon icons drawn on top of all cards
+    drawFloatingWeapons();
 
+    if (m_phase == InputPhase::ACTION_MENU)     drawActionMenu(snap);
+    else if (m_phase == InputPhase::TARGET_SELECT)   drawTargetOverlay(snap);
+    else if (m_phase == InputPhase::INVENTORY_SELECT) drawInventoryMenu(snap);
+    else if (m_phase == InputPhase::LONGTERM_SELECT)  drawLongTermMenu(snap);
+
+    if (snap.ultimate_active) drawUltimateOverlay();
+    drawStatusBar(snap);
     m_window.display();
 }
 
@@ -197,267 +346,685 @@ void Renderer::render(const RenderSnapshot& snap) {
 // drawBackground
 // ---------------------------------------------------------------------------
 void Renderer::drawBackground() {
-    // Draw dungeon background at reduced opacity so entity UI stays legible
-    sf::Uint8 alpha = 140;
-    m_bg_sprite.setColor(sf::Color(255, 255, 255, alpha));
+    m_bg_sprite.setColor(sf::Color(255, 255, 255, 130));
     m_window.draw(m_bg_sprite);
 }
 
-// ---------------------------------------------------------------------------
-// drawEntityRow
-// ---------------------------------------------------------------------------
-void Renderer::drawEntityRow(const RenderSnapshot::EntitySnap& ent,
-                              int entity_index,
-                              float y,
-                              bool  highlight_turn)
+void Renderer::drawText(const std::string& str, float x, float y,
+                         unsigned int size, sf::Color col)
 {
-    float x = m_entity_panel_x;
-    float row_w = m_entity_panel_w;
+    m_text.setFont(m_font);
+    m_text.setString(str);
+    m_text.setCharacterSize(size);
+    m_text.setFillColor(col);
+    m_text.setPosition(x, y);
+    m_window.draw(m_text);
+}
 
-    // Row highlight for the active entity
-    if (highlight_turn) {
-        m_rect.setSize({row_w, m_row_height - 2.f});
-        m_rect.setPosition(x, y);
-        m_rect.setFillColor(Color::TURN_HL);
-        m_rect.setOutlineThickness(1.5f);
-        m_rect.setOutlineColor(sf::Color(255, 230, 100, 120));
+void Renderer::drawPanelBackground(float x, float y, float w, float h,
+                                    sf::Color fill)
+{
+    m_rect.setSize({w, h});
+    m_rect.setPosition(x, y);
+    m_rect.setFillColor(fill);
+    m_rect.setOutlineThickness(1.5f);
+    m_rect.setOutlineColor(C::BORDER_GOLD);
+    m_window.draw(m_rect);
+}
+
+// ---------------------------------------------------------------------------
+// drawBattlefield
+// Players left column (x≈20), enemies right column (x≈660)
+// ---------------------------------------------------------------------------
+void Renderer::drawBattlefield(const RenderSnapshot& snap) {
+    drawText("CHRONO  RIFT", 12.f, 8.f, 28u, C::BORDER_GOLD);
+
+    // Centre divider
+    sf::RectangleShape div({2.f, m_win_h - 160.f});
+    div.setPosition(m_win_w / 2.f, 45.f);
+    div.setFillColor(sf::Color(C::BORDER_GOLD.r, C::BORDER_GOLD.g,
+                                C::BORDER_GOLD.b, 80));
+    m_window.draw(div);
+
+    drawText("PLAYERS", 80.f,  42.f, kFontMd, C::PLAYER_NAME);
+    drawText("ENEMIES", 830.f, 42.f, kFontMd, C::ENEMY_NAME);
+
+    const float CARD_W   = 190.f;
+    const float CARD_H   = 130.f;
+    const float CARD_GAP =  10.f;
+    const float LEFT_X   =  20.f;
+    const float RIGHT_X  = 660.f;
+    const float START_Y  =  64.f;
+
+    int p_row = 0, e_row = 0;
+    int total = snap.player_count + snap.npc_count;
+
+    for (int i = 0; i < total && i < MAX_ENTITIES; ++i) {
+        const auto& ent = snap.entities[i];
+        float cx, cy;
+        if (ent.is_player) {
+            cx = LEFT_X;
+            cy = START_Y + p_row * (CARD_H + CARD_GAP);
+            ++p_row;
+        } else {
+            cx = RIGHT_X;
+            cy = START_Y + e_row * (CARD_H + CARD_GAP);
+            ++e_row;
+        }
+
+        // Store card centre for animation position interpolation
+        m_entity_pos[i] = {cx + CARD_W / 2.f, cy + CARD_H / 2.f};
+
+        float draw_x = cx + m_anims[i].attack_dx;
+        drawEntityCard(ent, i, {draw_x, cy}, snap.current_turn_idx == i);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// drawEntityCard
+// ---------------------------------------------------------------------------
+void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
+                               int entity_index,
+                               sf::Vector2f pos,
+                               bool highlight)
+{
+    const float W = 190.f;
+    const float H = 130.f;
+    auto& anim = m_anims[entity_index];
+
+    // Card bg
+    sf::Color bg = ent.is_player ? C::PLAYER_BG : C::ENEMY_BG;
+    if (!ent.is_alive) bg = sf::Color(20, 20, 20, 160);
+    drawPanelBackground(pos.x, pos.y, W, H, bg);
+
+    // Turn highlight pulsing border
+    if (highlight && ent.is_alive) {
+        float pulse = 0.5f + 0.5f * std::sin(anim.pulse_t);
+        m_rect.setSize({W, H});
+        m_rect.setPosition(pos.x, pos.y);
+        m_rect.setFillColor(sf::Color(255, 230, 100,
+                                       (sf::Uint8)(20.f * pulse)));
+        m_rect.setOutlineThickness(2.5f);
+        m_rect.setOutlineColor(sf::Color(255, 230, 100,
+                                          (sf::Uint8)(80.f + 120.f * pulse)));
         m_window.draw(m_rect);
     }
 
-    // ---- Sprite (Partner B draws it; we provide position) ------------------
-    // Sprite is 40×40 px, vertically centred in the row
-    float sprite_x = x + 2.f;
-    float sprite_y = y + (m_row_height - 40.f) / 2.f;
+    // Sprite with turn-pulse scale
+    float scale_bump  = (highlight && ent.is_alive)
+                        ? 1.f + 0.04f * std::sin(anim.pulse_t) : 1.f;
+    float sprite_base = 72.f;
+    float sprite_size = sprite_base * scale_bump;
+    float sprite_x    = pos.x + (W - sprite_size) / 2.f;
+    float sprite_y    = pos.y + 4.f;
+
     m_sprites.drawEntity(m_window, entity_index, ent.is_player,
-                         {sprite_x, sprite_y});
+                          {sprite_x, sprite_y},
+                          {sprite_size, sprite_size});
 
-    // ---- Turn arrow icon ---------------------------------------------------
-    float icon_offset = 44.f;
-    if (highlight_turn) {
-        m_sprites.drawStatusIcon(m_window, "turn",
-                                 {x + icon_offset, sprite_y});
-        icon_offset += 22.f;
+    // Hit flash overlay
+    if (anim.hit_flash && anim.hit_flash_t > 0.f) {
+        m_rect.setSize({sprite_size, sprite_size});
+        m_rect.setPosition(sprite_x, sprite_y);
+        m_rect.setFillColor(sf::Color(255, 30, 30,
+                                       (sf::Uint8)(150.f * anim.hit_flash_t)));
+        m_rect.setOutlineThickness(0.f);
+        m_window.draw(m_rect);
     }
 
-    // ---- Name --------------------------------------------------------------
-    float name_x = x + icon_offset + 4.f;
-    m_text.setCharacterSize(m_font_size_normal);
+    // Stun flash burst  – draw the stunned icon flashing over the card
+    if (anim.stun_flash && anim.stun_flashes > 0) {
+        // Blink: visible in first half of each cycle
+        bool visible = anim.stun_flash_t < 0.5f;
+        if (visible) {
+            // Large stunned icon centred on the card
+            float icon_sz = 48.f;
+            float icon_x  = pos.x + (W - icon_sz) / 2.f;
+            float icon_y  = pos.y + (H - icon_sz) / 2.f - 10.f;
+            m_sprites.drawStatusIcon(m_window, "stunned",
+                                      {icon_x, icon_y},
+                                      {icon_sz, icon_sz});
+            // Translucent yellow overlay so it really pops
+            m_rect.setSize({W, H});
+            m_rect.setPosition(pos.x, pos.y);
+            m_rect.setFillColor(sf::Color(200, 255, 80, 40));
+            m_rect.setOutlineThickness(0.f);
+            m_window.draw(m_rect);
+        }
+    }
+
+    // Death fade
+    if (anim.dead_confirmed && anim.death_alpha < 255.f) {
+        float fade = 1.f - anim.death_alpha / 255.f;
+        m_rect.setSize({W, H});
+        m_rect.setPosition(pos.x, pos.y);
+        m_rect.setFillColor(sf::Color(0, 0, 0,
+                                       (sf::Uint8)(200.f * fade)));
+        m_rect.setOutlineThickness(0.f);
+        m_window.draw(m_rect);
+    }
+
+    // Name
+    sf::Color name_col = ent.is_player ? C::PLAYER_NAME : C::ENEMY_NAME;
+    if (!ent.is_alive) name_col = C::DEAD_COL;
+    drawText(ent.name, pos.x + 4.f, pos.y + 78.f, kFontSm, name_col);
+
     if (!ent.is_alive) {
-        m_text.setFillColor(Color::DEAD_NAME);
-        m_text.setString(std::string(ent.name) + " [DEAD]");
-    } else if (ent.is_player) {
-        m_text.setFillColor(Color::PLAYER_NAME);
-        m_text.setString(ent.name);
-    } else {
-        m_text.setFillColor(Color::ENEMY_NAME);
-        m_text.setString(ent.name);
+        drawText("DEAD", pos.x + W / 2.f - 16.f, pos.y + H / 2.f - 8.f,
+                 kFontMd, sf::Color(180, 30, 30, 200));
+        return;
     }
-    m_text.setPosition(name_x, y + 4.f);
-    m_window.draw(m_text);
 
-    if (!ent.is_alive) return;   // dead entities: name only, skip bars
+    // HP bar
+    drawHpBar(pos.x + 4.f, pos.y + 92.f, W - 8.f, 8.f, ent.hp, ent.max_hp);
+    char hpbuf[32];
+    std::snprintf(hpbuf, sizeof(hpbuf), "%d/%d", ent.hp, ent.max_hp);
+    drawText(hpbuf, pos.x + 4.f, pos.y + 101.f, kFontSm - 1,
+             sf::Color(200, 200, 200, 200));
 
-    // ---- HP bar ------------------------------------------------------------
-    float bar_x  = name_x;
-    float bar_y  = y + 24.f;
-    float bar_w  = 160.f;
-    float bar_h  = 8.f;
-    drawHpBar(bar_x, bar_y, bar_w, bar_h, ent.hp, ent.max_hp);
+    // Stamina bar
+    drawStaminaBar(pos.x + 4.f, pos.y + 115.f, W - 8.f, 6.f,
+                   ent.stamina, ent.max_stamina);
+    int sp = ent.max_stamina > 0.f
+             ? (int)(ent.stamina / ent.max_stamina * 100.f) : 0;
+    char sbuf[16];
+    std::snprintf(sbuf, sizeof(sbuf), "SP %d%%", sp);
+    drawText(sbuf, pos.x + W - 42.f, pos.y + 114.f, kFontSm - 2, C::STAM_COL);
 
-    // HP numeric text  (e.g. "412 / 800")
-    char hp_buf[32];
-    std::snprintf(hp_buf, sizeof(hp_buf), "%d/%d", ent.hp, ent.max_hp);
-    m_text.setCharacterSize(m_font_size_small);
-    m_text.setFillColor(sf::Color(200, 200, 200, 200));
-    m_text.setString(hp_buf);
-    m_text.setPosition(bar_x + bar_w + 5.f, bar_y - 2.f);
-    m_window.draw(m_text);
-
-    // ---- Stamina bar -------------------------------------------------------
-    float stam_x = bar_x + bar_w + 70.f;
-    float stam_w = 120.f;
-    drawStaminaBar(stam_x, bar_y, stam_w, bar_h, ent.stamina, ent.max_stamina);
-
-    // Stamina %
-    int stam_pct = (ent.max_stamina > 0.f)
-                   ? static_cast<int>(ent.stamina / ent.max_stamina * 100.f)
-                   : 0;
-    char stam_buf[16];
-    std::snprintf(stam_buf, sizeof(stam_buf), "%d%%", stam_pct);
-    m_text.setCharacterSize(m_font_size_small);
-    m_text.setFillColor(Color::STAM_FULL);
-    m_text.setString(stam_buf);
-    m_text.setPosition(stam_x + stam_w + 4.f, bar_y - 2.f);
-    m_window.draw(m_text);
-
-    // ---- STUNNED icon + label ----------------------------------------------
+    // Status icons (turn arrow + stunned label)
+    float icon_x = pos.x + 4.f;
+    if (highlight) {
+        m_sprites.drawStatusIcon(m_window, "turn",
+                                  {icon_x, pos.y + 78.f}, {14.f, 14.f});
+        icon_x += 18.f;
+    }
     if (ent.is_stunned) {
-        float stun_x = stam_x + stam_w + 40.f;
-        m_sprites.drawStatusIcon(m_window, "stunned", {stun_x, sprite_y});
-        m_text.setCharacterSize(m_font_size_small);
-        m_text.setFillColor(Color::STUN_CLR);
-        m_text.setString("STUNNED");
-        m_text.setPosition(stun_x + 22.f, y + 4.f);
-        m_window.draw(m_text);
+        m_sprites.drawStatusIcon(m_window, "stunned",
+                                  {icon_x, pos.y + 78.f}, {14.f, 14.f});
+        drawText("STUN", icon_x + 16.f, pos.y + 78.f,
+                 kFontSm - 2, C::STUN_COL);
     }
 
-    // ---- Weapon icon strip (first 4 occupied weapons) ----------------------
-    float wicon_x = stam_x + stam_w + (ent.is_stunned ? 110.f : 40.f);
+    // Weapon icon strip (up to 3)
     int drawn = 0;
-    for (int s = 0; s < INVENTORY_SLOTS && drawn < 4; ++s) {
+    for (int s = 0; s < INVENTORY_SLOTS && drawn < 3; ++s) {
         const auto& slot = ent.inventory[s];
-        if (!slot.occupied || slot.name[0] == '\0') continue;
-        // Only draw at the "head" slot (slot_size > 0)
-        if (slot.slot_size <= 0) continue;
+        if (!slot.occupied || slot.name[0] == '\0' || slot.slot_size <= 0)
+            continue;
         m_sprites.drawWeaponIcon(m_window, slot.name,
-                                 {wicon_x + drawn * 22.f, sprite_y + 4.f});
+                                  {pos.x + 4.f + drawn * 22.f, pos.y + 58.f},
+                                  {18.f, 18.f});
         ++drawn;
     }
 }
 
 // ---------------------------------------------------------------------------
-// drawHpBar
+// drawFloatingWeapons
+// Drawn after all cards so it appears on top.
+// Interpolates the icon position between attacker card centre and the midpoint
+// between attacker and target.
+// ---------------------------------------------------------------------------
+void Renderer::drawFloatingWeapons() {
+    for (int i = 0; i < MAX_ENTITIES; ++i) {
+        auto& a = m_anims[i];
+        if (!a.weapon_float || a.weapon_float_name[0] == '\0') continue;
+        if (a.weapon_float_target < 0 ||
+            a.weapon_float_target >= MAX_ENTITIES)   continue;
+
+        sf::Vector2f from  = m_entity_pos[i];
+        sf::Vector2f to    = m_entity_pos[a.weapon_float_target];
+        // Travel to midpoint only
+        sf::Vector2f mid   = {(from.x + to.x) / 2.f,
+                               (from.y + to.y) / 2.f - 20.f};
+
+        float t = a.weapon_float_t;   // 0 → 1
+        sf::Vector2f cur = {from.x + (mid.x - from.x) * t,
+                             from.y + (mid.y - from.y) * t};
+
+        // Size pulses slightly as it flies
+        float sz = 32.f + 8.f * std::sin(t * 3.14159f);
+
+        // Draw a glow halo behind the icon
+        m_rect.setSize({sz + 10.f, sz + 10.f});
+        m_rect.setPosition(cur.x - sz / 2.f - 5.f, cur.y - sz / 2.f - 5.f);
+        m_rect.setFillColor(sf::Color(255, 220, 60, (sf::Uint8)(80.f * t)));
+        m_rect.setOutlineThickness(0.f);
+        m_window.draw(m_rect);
+
+        // Draw the weapon icon centred at cur
+        m_sprites.drawWeaponIcon(m_window, a.weapon_float_name,
+                                  {cur.x - sz / 2.f, cur.y - sz / 2.f},
+                                  {sz, sz});
+    }
+}
+
+// ---------------------------------------------------------------------------
+// drawHpBar / drawStaminaBar
 // ---------------------------------------------------------------------------
 void Renderer::drawHpBar(float x, float y, float w, float h,
                           int hp, int max_hp)
 {
-    // Background
     m_rect.setSize({w, h});
     m_rect.setPosition(x, y);
-    m_rect.setFillColor(Color::HP_BG);
+    m_rect.setFillColor(C::HP_BG);
     m_rect.setOutlineThickness(1.f);
     m_rect.setOutlineColor(sf::Color(80, 20, 20, 180));
     m_window.draw(m_rect);
-
-    // Fill
-    float ratio = (max_hp > 0) ? std::max(0.f, std::min(1.f, static_cast<float>(hp) / max_hp)) : 0.f;
-    bool  low   = ratio < 0.30f;
-    m_rect.setSize({w * ratio, h});
-    m_rect.setFillColor(low ? Color::HP_LOW : Color::HP_FULL);
+    float r = max_hp > 0
+        ? std::max(0.f, std::min(1.f, (float)hp / max_hp)) : 0.f;
+    m_rect.setSize({w * r, h});
+    m_rect.setFillColor(r < 0.3f ? C::HP_LOW : C::HP_HIGH);
     m_rect.setOutlineThickness(0.f);
     m_window.draw(m_rect);
 }
 
-// ---------------------------------------------------------------------------
-// drawStaminaBar
-// ---------------------------------------------------------------------------
 void Renderer::drawStaminaBar(float x, float y, float w, float h,
                                float stamina, float max_stamina)
 {
     m_rect.setSize({w, h});
     m_rect.setPosition(x, y);
-    m_rect.setFillColor(Color::STAM_BG);
+    m_rect.setFillColor(C::STAM_BG);
     m_rect.setOutlineThickness(1.f);
-    m_rect.setOutlineColor(sf::Color(60, 50, 10, 180));
+    m_rect.setOutlineColor(sf::Color(60, 50, 10, 160));
     m_window.draw(m_rect);
-
-    float ratio = (max_stamina > 0.f)
-                  ? std::max(0.f, std::min(1.f, stamina / max_stamina))
-                  : 0.f;
-    m_rect.setSize({w * ratio, h});
-    m_rect.setFillColor(Color::STAM_FULL);
+    float r = max_stamina > 0.f
+        ? std::max(0.f, std::min(1.f, stamina / max_stamina)) : 0.f;
+    m_rect.setSize({w * r, h});
+    m_rect.setFillColor(C::STAM_COL);
     m_rect.setOutlineThickness(0.f);
     m_window.draw(m_rect);
 }
 
 // ---------------------------------------------------------------------------
-// drawActionLog
+// drawStatusBar
 // ---------------------------------------------------------------------------
-void Renderer::drawActionLog(const RenderSnapshot& snap) {
-    // Panel background
-    drawPanelBackground(m_log_panel_x, m_log_panel_y,
-                        m_log_panel_w, m_log_panel_h,
-                        Color::LOG_BG);
-
-    // "Action Log" heading
-    m_text.setCharacterSize(18u);
-    m_text.setFillColor(Color::LOG_HEAD);
-    m_text.setString("Action Log");
-    m_text.setPosition(m_log_panel_x + 10.f, m_log_panel_y + 6.f);
-    m_window.draw(m_text);
-
-    // Separator line
-    sf::RectangleShape sep({m_log_panel_w - 20.f, 1.f});
-    sep.setPosition(m_log_panel_x + 10.f, m_log_panel_y + 28.f);
-    sep.setFillColor(Color::BORDER);
-    m_window.draw(sep);
-
-    // Last 10 log entries (newest at bottom)
-    const int kLines = 10;
-    float line_h = (m_log_panel_h - 36.f) / static_cast<float>(kLines);
-    m_text.setCharacterSize(m_font_size_small);
-
-    for (int i = 0; i < kLines; ++i) {
-        // index into circular buffer: newest entry = log_head-1, oldest shown = log_head-10
-        int buf_idx = (snap.log_head - kLines + i + ACTION_LOG_LINES) % ACTION_LOG_LINES;
-        const char* entry = snap.log[buf_idx];
-        if (entry[0] == '\0') continue;
-
-        // Fade older entries
-        sf::Uint8 alpha = static_cast<sf::Uint8>(120 + i * 13);
-        m_text.setFillColor(sf::Color(Color::LOG_TEXT.r, Color::LOG_TEXT.g,
-                                      Color::LOG_TEXT.b, alpha));
-        m_text.setString(entry);
-        float ty = m_log_panel_y + 34.f + i * line_h;
-        m_text.setPosition(m_log_panel_x + 10.f, ty);
-        m_window.draw(m_text);
+void Renderer::drawStatusBar(const RenderSnapshot& snap) {
+    float sy = m_win_h - 38.f;
+    drawPanelBackground(0.f, sy, m_win_w, 38.f, C::PANEL_DARK);
+    int idx = snap.current_turn_idx;
+    if (idx >= 0 && idx < snap.player_count + snap.npc_count) {
+        const auto& e = snap.entities[idx];
+        std::string msg;
+        if (e.is_my_turn) {
+            msg = std::string(e.name) + "'s turn";
+            if (e.is_player && m_phase != InputPhase::NONE)
+                msg += "  —  Choose an action";
+            else if (!e.is_player)
+                msg += "  —  Enemy is thinking...";
+        }
+        drawText(msg, 12.f, sy + 10.f, kFontMd, C::WHITE);
     }
+    if (snap.ultimate_active)
+        drawText("ULTIMATE ACTIVE", m_win_w - 200.f, sy + 10.f,
+                 kFontMd, sf::Color(255, 220, 60, 255));
+}
+
+// ---------------------------------------------------------------------------
+// Button helpers
+// ---------------------------------------------------------------------------
+static GuiButton makeButton(float x, float y, float w, float h,
+                             const std::string& label, bool enabled = true)
+{
+    GuiButton b;
+    b.bounds  = {x, y, w, h};
+    b.label   = label;
+    b.enabled = enabled;
+    return b;
+}
+
+static void drawButton(sf::RenderWindow& win, sf::RectangleShape& rect,
+                        sf::Text& text, sf::Font& font,
+                        const GuiButton& btn)
+{
+    sf::Color fill = btn.enabled
+        ? (btn.hovered ? C::BTN_HOVER : C::BTN_NORMAL) : C::BTN_DISABLE;
+    rect.setSize({btn.bounds.width, btn.bounds.height});
+    rect.setPosition(btn.bounds.left, btn.bounds.top);
+    rect.setFillColor(fill);
+    rect.setOutlineThickness(1.5f);
+    rect.setOutlineColor(btn.enabled ? C::BORDER_GOLD
+                                     : sf::Color(50, 50, 50, 120));
+    win.draw(rect);
+    text.setFont(font);
+    text.setString(btn.label);
+    text.setCharacterSize(13u);
+    text.setFillColor(btn.enabled ? C::BTN_TEXT : C::DEAD_COL);
+    sf::FloatRect tb = text.getLocalBounds();
+    text.setPosition(
+        btn.bounds.left + (btn.bounds.width  - tb.width)  / 2.f,
+        btn.bounds.top  + (btn.bounds.height - tb.height) / 2.f - 2.f);
+    win.draw(text);
+}
+
+void Renderer::buildActionButtons(const RenderSnapshot::EntitySnap& actor) {
+    m_action_buttons.clear();
+    const float BW = 180.f, BH = 38.f, GAP = 8.f;
+    const float MX = (m_win_w - BW * 2.f - GAP) / 2.f;
+    const float MY = 550.f;
+
+    struct { const char* label; bool enabled; } acts[] = {
+        {"Strike",    true},
+        {"Exhaust",   true},
+        {"Heal",      true},
+        {"Skip",      true},
+        {"Use Weapon",true},
+        {"Swap In",   actor.long_term_count > 0},
+        {"Ultimate",  actor.holds_solar_core && actor.holds_lunar_blade},
+        {"Stun",      true},
+        {"Quit",      true},
+    };
+    for (int i = 0; i < 9; ++i) {
+        int col = i % 2, row = i / 2;
+        m_action_buttons.push_back(
+            makeButton(MX + col * (BW + GAP), MY + row * (BH + GAP),
+                       BW, BH, acts[i].label, acts[i].enabled));
+    }
+}
+
+void Renderer::buildTargetButtons(const RenderSnapshot& snap) {
+    m_target_buttons.clear();
+    const float BW = 200.f, BH = 34.f, GAP = 6.f;
+    const float MX = m_win_w / 2.f - BW / 2.f;
+    float by = 120.f;
+    int total = snap.player_count + snap.npc_count;
+    for (int i = 0; i < total; ++i) {
+        const auto& e = snap.entities[i];
+        if (e.is_player || !e.is_alive) continue;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "[%d] %s  HP:%d", i, e.name, e.hp);
+        auto btn = makeButton(MX, by, BW, BH, buf, true);
+        btn.bounds.left = (float)i;   // encode entity index
+        m_target_buttons.push_back(btn);
+        by += BH + GAP;
+    }
+}
+
+void Renderer::buildInventoryButtons(const RenderSnapshot::EntitySnap& actor) {
+    m_inventory_buttons.clear();
+    const float BW = 230.f, BH = 34.f, GAP = 6.f;
+    const float MX = m_win_w / 2.f - BW / 2.f;
+    float by = 100.f;
+    for (int i = 0; i < INVENTORY_SLOTS; ++i) {
+        const auto& slot = actor.inventory[i];
+        if (!slot.occupied || slot.name[0] == '\0' || slot.slot_size <= 0)
+            continue;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "[%d] %s (slots:%d)", i,
+                      slot.name, slot.slot_size);
+        auto btn = makeButton(MX, by, BW, BH, buf, true);
+        btn.bounds.left = (float)i;
+        m_inventory_buttons.push_back(btn);
+        by += BH + GAP;
+    }
+    if (m_inventory_buttons.empty())
+        m_inventory_buttons.push_back(
+            makeButton(m_win_w/2.f-115.f, 100.f, 230.f, 34.f,
+                       "No weapons", false));
+}
+
+void Renderer::buildLongTermButtons(const RenderSnapshot::EntitySnap& actor) {
+    m_longterm_buttons.clear();
+    const float BW = 230.f, BH = 34.f, GAP = 6.f;
+    const float MX = m_win_w / 2.f - BW / 2.f;
+    float by = 100.f;
+    for (int i = 0; i < actor.long_term_count && i < LONG_TERM_SIZE; ++i) {
+        const auto& slot = actor.long_term[i];
+        if (slot.name[0] == '\0') continue;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "[%d] %s", i, slot.name);
+        auto btn = makeButton(MX, by, BW, BH, buf, true);
+        btn.bounds.left = (float)i;
+        m_longterm_buttons.push_back(btn);
+        by += BH + GAP;
+    }
+    if (m_longterm_buttons.empty())
+        m_longterm_buttons.push_back(
+            makeButton(m_win_w/2.f-115.f, 100.f, 230.f, 34.f,
+                       "Long-term empty", false));
+}
+
+// ---------------------------------------------------------------------------
+// Draw menus
+// ---------------------------------------------------------------------------
+void Renderer::drawActionMenu(const RenderSnapshot& snap) {
+    if (m_active_player < 0) return;
+    float panel_y = 540.f;
+    drawPanelBackground(0.f, panel_y, m_win_w, m_win_h - panel_y, C::MENU_BG);
+    drawText("Choose Action:", 12.f, panel_y + 6.f, kFontMd, C::BORDER_GOLD);
+    for (auto& btn : m_action_buttons)
+        drawButton(m_window, m_rect, m_text, m_font, btn);
+}
+
+void Renderer::drawTargetOverlay(const RenderSnapshot& snap) {
+    m_rect.setSize({m_win_w, m_win_h});
+    m_rect.setPosition(0.f, 0.f);
+    m_rect.setFillColor(sf::Color(0, 0, 0, 140));
+    m_rect.setOutlineThickness(0.f);
+    m_window.draw(m_rect);
+
+    const float BW = 200.f, MX = m_win_w/2.f - BW/2.f;
+    drawPanelBackground(MX - 10.f, 60.f, BW + 20.f,
+                         50.f + m_target_buttons.size() * 42.f, C::MENU_BG);
+    drawText("Select Target:", MX, 72.f, kFontMd, C::BORDER_GOLD);
+
+    float by = 100.f;
+    for (auto& btn : m_target_buttons) {
+        GuiButton db = btn; db.bounds.left = MX; db.bounds.top = by;
+        drawButton(m_window, m_rect, m_text, m_font, db);
+        by += 40.f;
+    }
+    drawButton(m_window, m_rect, m_text, m_font,
+               makeButton(MX, by + 6.f, BW, 32.f, "< Back"));
+}
+
+void Renderer::drawInventoryMenu(const RenderSnapshot& snap) {
+    m_rect.setSize({m_win_w, m_win_h});
+    m_rect.setPosition(0.f, 0.f);
+    m_rect.setFillColor(sf::Color(0, 0, 0, 140));
+    m_rect.setOutlineThickness(0.f);
+    m_window.draw(m_rect);
+
+    const float BW = 230.f, MX = m_win_w/2.f - BW/2.f;
+    drawPanelBackground(MX - 10.f, 60.f, BW + 20.f,
+                         50.f + (m_inventory_buttons.size()+1)*42.f, C::MENU_BG);
+    drawText("Select Weapon:", MX, 72.f, kFontMd, C::BORDER_GOLD);
+
+    float by = 100.f;
+    for (auto& btn : m_inventory_buttons) {
+        GuiButton db = btn; db.bounds.left = MX; db.bounds.top = by;
+        drawButton(m_window, m_rect, m_text, m_font, db);
+        by += 40.f;
+    }
+    drawButton(m_window, m_rect, m_text, m_font,
+               makeButton(MX, by + 6.f, BW, 32.f, "< Back"));
+}
+
+void Renderer::drawLongTermMenu(const RenderSnapshot& snap) {
+    m_rect.setSize({m_win_w, m_win_h});
+    m_rect.setPosition(0.f, 0.f);
+    m_rect.setFillColor(sf::Color(0, 0, 0, 140));
+    m_rect.setOutlineThickness(0.f);
+    m_window.draw(m_rect);
+
+    const float BW = 230.f, MX = m_win_w/2.f - BW/2.f;
+    drawPanelBackground(MX - 10.f, 60.f, BW + 20.f,
+                         50.f + (m_longterm_buttons.size()+1)*42.f, C::MENU_BG);
+    drawText("Swap In (Long-Term):", MX, 72.f, kFontMd, C::BORDER_GOLD);
+
+    float by = 100.f;
+    for (auto& btn : m_longterm_buttons) {
+        GuiButton db = btn; db.bounds.left = MX; db.bounds.top = by;
+        drawButton(m_window, m_rect, m_text, m_font, db);
+        by += 40.f;
+    }
+    drawButton(m_window, m_rect, m_text, m_font,
+               makeButton(MX, by + 6.f, BW, 32.f, "< Back"));
 }
 
 // ---------------------------------------------------------------------------
 // drawUltimateOverlay
 // ---------------------------------------------------------------------------
 void Renderer::drawUltimateOverlay() {
-    // Full-screen golden vignette
-    sf::RectangleShape overlay({m_win_w, m_win_h});
-    overlay.setPosition(0.f, 0.f);
-    overlay.setFillColor(sf::Color(255, 180, 20, 30));
-    m_window.draw(overlay);
-
-    // Animated pulsing border (4 thick rects along edges)
-    static float pulse_t = 0.f;
-    pulse_t += 0.05f;
-    sf::Uint8 border_alpha = static_cast<sf::Uint8>(
-        100.f + 80.f * std::abs(std::sin(pulse_t)));
-
-    sf::Color bc(255, 200, 50, border_alpha);
-    float bw = 6.f;
-    // Top
-    sf::RectangleShape b({m_win_w, bw});
-    b.setFillColor(bc);
-    b.setPosition(0.f, 0.f); m_window.draw(b);
-    // Bottom
-    b.setPosition(0.f, m_win_h - bw); m_window.draw(b);
-    // Left
-    b.setSize({bw, m_win_h});
-    b.setPosition(0.f, 0.f); m_window.draw(b);
-    // Right
-    b.setPosition(m_win_w - bw, 0.f); m_window.draw(b);
-
-    // "ULTIMATE ACTIVE" label
-    m_text.setCharacterSize(26u);
-    m_text.setFillColor(sf::Color(255, 230, 80, border_alpha));
+    static float pt = 0.f; pt += 0.04f;
+    sf::Uint8 ba = (sf::Uint8)(90.f + 80.f * std::abs(std::sin(pt)));
+    sf::RectangleShape ov({m_win_w, m_win_h});
+    ov.setPosition(0.f, 0.f);
+    ov.setFillColor(sf::Color(255, 180, 20, 25));
+    m_window.draw(ov);
+    float bw = 5.f;
+    sf::Color bc(255, 200, 50, ba);
+    auto edge = [&](float x, float y, float w, float h) {
+        sf::RectangleShape r({w,h}); r.setPosition(x,y);
+        r.setFillColor(bc); m_window.draw(r);
+    };
+    edge(0,0,m_win_w,bw); edge(0,m_win_h-bw,m_win_w,bw);
+    edge(0,0,bw,m_win_h); edge(m_win_w-bw,0,bw,m_win_h);
+    m_text.setCharacterSize(24u);
+    m_text.setFillColor(sf::Color(255,230,80,ba));
     m_text.setString("ULTIMATE ACTIVE");
     sf::FloatRect tb = m_text.getLocalBounds();
-    m_text.setPosition((m_win_w - tb.width) / 2.f, 8.f);
+    m_text.setPosition((m_win_w - tb.width)/2.f, 10.f);
     m_window.draw(m_text);
-
-    // Ultimate swirl icon (centre-top, drawn by Partner B)
     m_sprites.drawStatusIcon(m_window, "ultimate",
-                             {(m_win_w - 40.f) / 2.f - 50.f, 8.f});
+                              {(m_win_w-40.f)/2.f-60.f, 8.f}, {28.f,28.f});
 }
 
 // ---------------------------------------------------------------------------
-// drawPanelBackground  (rounded rect approximated with a plain rect + border)
+// Mouse handling
 // ---------------------------------------------------------------------------
-void Renderer::drawPanelBackground(float x, float y, float w, float h,
-                                    sf::Color fill, float /*corner_radius*/)
-{
-    // Main fill
-    m_rect.setSize({w, h});
-    m_rect.setPosition(x, y);
-    m_rect.setFillColor(fill);
-    m_rect.setOutlineThickness(1.5f);
-    m_rect.setOutlineColor(Color::BORDER);
-    m_window.draw(m_rect);
+void Renderer::handleMouseMove(sf::Vector2f mp) {
+    auto hover = [&](std::vector<GuiButton>& btns) {
+        for (auto& b : btns) b.hovered = b.bounds.contains(mp);
+    };
+    hover(m_action_buttons);
+    hover(m_target_buttons);
+    hover(m_inventory_buttons);
+    hover(m_longterm_buttons);
+}
+
+void Renderer::handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap) {
+    if (m_pending_gui_action.ready) return;
+
+    // ---- ACTION MENU -------------------------------------------------------
+    if (m_phase == InputPhase::ACTION_MENU) {
+        ActionType action_types[] = {
+            ActionType::STRIKE, ActionType::EXHAUST, ActionType::HEAL,
+            ActionType::SKIP,   ActionType::USE_WEAPON, ActionType::SWAP_IN,
+            ActionType::ULTIMATE, ActionType::STUN, ActionType::QUIT
+        };
+        for (int i = 0; i < (int)m_action_buttons.size(); ++i) {
+            const auto& btn = m_action_buttons[i];
+            if (!btn.enabled || !btn.bounds.contains(mp)) continue;
+            ActionType chosen = action_types[i];
+
+            if (chosen == ActionType::HEAL  || chosen == ActionType::SKIP ||
+                chosen == ActionType::QUIT  || chosen == ActionType::ULTIMATE)
+            {
+                m_pending_gui_action = {true, chosen, -1, -1};
+                m_phase = InputPhase::NONE;
+                return;
+            }
+            if (chosen == ActionType::STRIKE || chosen == ActionType::EXHAUST ||
+                chosen == ActionType::STUN)
+            {
+                m_pending_action = chosen;
+                m_phase = InputPhase::TARGET_SELECT;
+                buildTargetButtons(snap);
+                return;
+            }
+            if (chosen == ActionType::USE_WEAPON) {
+                m_pending_action = ActionType::USE_WEAPON;
+                m_phase = InputPhase::INVENTORY_SELECT;
+                buildInventoryButtons(snap.entities[m_active_player]);
+                return;
+            }
+            if (chosen == ActionType::SWAP_IN) {
+                m_pending_action = ActionType::SWAP_IN;
+                m_phase = InputPhase::LONGTERM_SELECT;
+                buildLongTermButtons(snap.entities[m_active_player]);
+                return;
+            }
+        }
+        return;
+    }
+
+    // ---- TARGET SELECT -----------------------------------------------------
+    if (m_phase == InputPhase::TARGET_SELECT) {
+        const float BW = 200.f, MX = m_win_w/2.f - BW/2.f;
+        float by = 100.f;
+        for (auto& btn : m_target_buttons) {
+            sf::FloatRect dr{MX, by, BW, 34.f};
+            if (dr.contains(mp)) {
+                int entity_idx = (int)btn.bounds.left;
+                m_pending_gui_action = {true, m_pending_action,
+                                        entity_idx,
+                                        m_pending_gui_action.weapon_slot};
+                m_phase = InputPhase::NONE;
+                return;
+            }
+            by += 40.f;
+        }
+        // Back
+        sf::FloatRect back{MX, by + 6.f, BW, 32.f};
+        if (back.contains(mp)) {
+            // If we came from inventory, go back there, else action menu
+            if (m_pending_action == ActionType::USE_WEAPON &&
+                m_pending_gui_action.weapon_slot >= 0)
+            {
+                m_phase = InputPhase::INVENTORY_SELECT;
+                buildInventoryButtons(snap.entities[m_active_player]);
+            } else {
+                m_phase = InputPhase::ACTION_MENU;
+                buildActionButtons(snap.entities[m_active_player]);
+                m_pending_gui_action.weapon_slot = -1;
+            }
+        }
+        return;
+    }
+
+    // ---- INVENTORY SELECT --------------------------------------------------
+    if (m_phase == InputPhase::INVENTORY_SELECT) {
+        const float BW = 230.f, MX = m_win_w/2.f - BW/2.f;
+        float by = 100.f;
+        for (auto& btn : m_inventory_buttons) {
+            sf::FloatRect dr{MX, by, BW, 34.f};
+            if (btn.enabled && dr.contains(mp)) {
+                m_pending_gui_action.weapon_slot = (int)btn.bounds.left;
+                m_pending_action = ActionType::USE_WEAPON;
+                m_phase = InputPhase::TARGET_SELECT;
+                buildTargetButtons(snap);
+                return;
+            }
+            by += 40.f;
+        }
+        sf::FloatRect back{MX, by + 6.f, BW, 32.f};
+        if (back.contains(mp)) {
+            m_phase = InputPhase::ACTION_MENU;
+            buildActionButtons(snap.entities[m_active_player]);
+            m_pending_gui_action.weapon_slot = -1;
+        }
+        return;
+    }
+
+    // ---- LONGTERM SELECT ---------------------------------------------------
+    if (m_phase == InputPhase::LONGTERM_SELECT) {
+        const float BW = 230.f, MX = m_win_w/2.f - BW/2.f;
+        float by = 100.f;
+        for (auto& btn : m_longterm_buttons) {
+            sf::FloatRect dr{MX, by, BW, 34.f};
+            if (btn.enabled && dr.contains(mp)) {
+                m_pending_gui_action = {true, ActionType::SWAP_IN, -1,
+                                        (int)btn.bounds.left};
+                m_phase = InputPhase::NONE;
+                return;
+            }
+            by += 40.f;
+        }
+        sf::FloatRect back{MX, by + 6.f, BW, 32.f};
+        if (back.contains(mp)) {
+            m_phase = InputPhase::ACTION_MENU;
+            buildActionButtons(snap.entities[m_active_player]);
+        }
+        return;
+    }
 }

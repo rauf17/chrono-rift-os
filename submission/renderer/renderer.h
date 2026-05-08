@@ -1,19 +1,14 @@
 #pragma once
 
-// renderer.h  –  Partner A
-// Owns: SFML window, background, entity rows (HP/stamina bars, status icons),
-//       action log panel, ultimate overlay.
-// Does NOT own: sprite sheet UV rects, entity sprite selection, weapon icons.
-//               Those live in sprite_sheet.h / sprite_sheet.cpp (Partner B).
-
 #include <SFML/Graphics.hpp>
 #include <string>
+#include <array>
 #include "../shared/shared_state.h"
-#include "sprite_sheet.h"   // Partner B's class – included here, owned there
+#include "sprite_sheet.h"
 
-// A plain-old-data snapshot of GlobalState that Renderer holds for one frame.
-// Renderer takes a value copy of this so it never touches shared memory
-// while drawing (no mutex needed during render calls).
+// ---------------------------------------------------------------------------
+// RenderSnapshot
+// ---------------------------------------------------------------------------
 struct RenderSnapshot {
     int  player_count;
     int  npc_count;
@@ -33,83 +28,175 @@ struct RenderSnapshot {
         int   max_hp;
         float stamina;
         float max_stamina;
-        // Inventory – only first 6 occupied weapons for icon strip
         struct WeaponSnap {
             char name[32];
             bool occupied;
             int  slot_size;
             bool is_artifact;
         } inventory[INVENTORY_SLOTS];
+        struct WeaponSnap long_term[LONG_TERM_SIZE];
+        int  long_term_count;
+        bool holds_solar_core;
+        bool holds_lunar_blade;
     } entities[MAX_ENTITIES];
 };
 
-// Capture a thread-safe snapshot of GlobalState.
-// Caller must NOT hold global_mutex when calling this.
-// This function locks global_mutex internally.
 RenderSnapshot captureSnapshot(GlobalState* state);
+
+// ---------------------------------------------------------------------------
+// EntityAnim  –  per-entity animation state
+// ---------------------------------------------------------------------------
+struct EntityAnim {
+
+    // --- Slide-forward attack -----------------------------------------------
+    bool  attacking     = false;
+    float attack_dx     = 0.f;      // current x pixel offset
+    float attack_target = 0.f;      // maximum slide distance
+    float attack_t      = 0.f;      // 0..1 progress timer
+    bool  attack_return = false;    // true while sliding back
+
+    // --- Floating weapon icon (Use Weapon action) ---------------------------
+    // Active while the attacker is mid-slide.
+    // The icon travels from the attacker card toward the target card,
+    // reaching the midpoint at attack_t==1, then disappearing on return.
+    bool  weapon_float        = false;
+    char  weapon_float_name[32] = {};   // which weapon icon to draw
+    int   weapon_float_target = -1;     // target entity index for position lerp
+    float weapon_float_t      = 0.f;    // 0=at attacker  1=at midpoint
+
+    // --- Hit flash (red tint) -----------------------------------------------
+    bool  hit_flash   = false;
+    float hit_flash_t = 0.f;   // 1 = full red, counts down to 0
+
+    // --- Stun flash burst ---------------------------------------------------
+    // Flashes the stunned icon over the target 3 times (~0.9 s total).
+    bool  stun_flash   = false;
+    float stun_flash_t = 0.f;   // counts 0 → 1 per flash cycle
+    int   stun_flashes = 0;     // flashes remaining (start at 3, counts down)
+
+    // --- Death fade ---------------------------------------------------------
+    float death_alpha    = 255.f;
+    bool  dead_confirmed = false;
+
+    // --- Turn pulse (sprite scale breathe) ----------------------------------
+    float pulse_t = 0.f;
+};
+
+// ---------------------------------------------------------------------------
+// GuiButton
+// ---------------------------------------------------------------------------
+struct GuiButton {
+    sf::FloatRect bounds;
+    std::string   label;
+    bool          enabled = true;
+    bool          hovered = false;
+};
+
+// ---------------------------------------------------------------------------
+// GuiAction  –  completed player choice, passed back to renderThreadSFML
+// ---------------------------------------------------------------------------
+struct GuiAction {
+    bool       ready       = false;
+    ActionType action      = ActionType::NONE;
+    int        target_idx  = -1;
+    int        weapon_slot = -1;
+};
 
 // ---------------------------------------------------------------------------
 // Renderer
 // ---------------------------------------------------------------------------
 class Renderer {
 public:
-    // window_title   – caption shown in the OS title bar
-    // assets_path    – path to the assets/ directory (e.g. "../assets")
     explicit Renderer(const std::string& assets_path,
                       const std::string& window_title = "Chrono Rift");
 
-    // Returns false once the window has been closed by the user.
-    bool isOpen() const;
-
-    // Drain the SFML event queue; call once per frame before render().
-    // Returns false if a close event was received.
+    bool isOpen()    const;
     bool pollEvents();
-
-    // Draw one complete frame from the given snapshot.
-    // Safe to call from any thread that exclusively owns the RenderWindow
-    // (i.e. the render thread). Never touches shared memory.
     void render(const RenderSnapshot& snap);
-
-    // Gracefully close the window.
     void close();
 
+    // Returns true once per turn when the player has committed an action.
+    bool pollGuiAction(GuiAction& out);
+
+    // Call when a player's turn starts (player_idx >= 0) or ends (-1).
+    void setPlayerTurn(int player_idx, const RenderSnapshot& snap);
+
+    // Animation triggers – called from renderThreadSFML
+    void triggerAttackAnim(int attacker_idx, int target_idx);
+    void triggerWeaponFloat(int attacker_idx, int target_idx,
+                            const char* weapon_name);
+    void triggerHitFlash(int target_idx);
+    void triggerStunFlash(int target_idx);
+    void triggerDeath(int entity_idx);
+
+    void stepAnimations(float dt_seconds);
+
 private:
-    // ---- helpers -----------------------------------------------------------
+    // ---- draw helpers ------------------------------------------------------
     void drawBackground();
-    void drawEntityRow(const RenderSnapshot::EntitySnap& ent,
-                       int entity_index,
-                       float y,
-                       bool  highlight_turn);
-    void drawHpBar(float x, float y, float w, float h,
-                   int hp, int max_hp);
+    void drawBattlefield(const RenderSnapshot& snap);
+    void drawEntityCard(const RenderSnapshot::EntitySnap& ent,
+                        int entity_index, sf::Vector2f pos, bool highlight);
+    void drawFloatingWeapons();
+    void drawHpBar(float x, float y, float w, float h, int hp, int max_hp);
     void drawStaminaBar(float x, float y, float w, float h,
                         float stamina, float max_stamina);
-    void drawActionLog(const RenderSnapshot& snap);
+    void drawActionMenu(const RenderSnapshot& snap);
+    void drawTargetOverlay(const RenderSnapshot& snap);
+    void drawInventoryMenu(const RenderSnapshot& snap);
+    void drawLongTermMenu(const RenderSnapshot& snap);
     void drawUltimateOverlay();
+    void drawStatusBar(const RenderSnapshot& snap);
     void drawPanelBackground(float x, float y, float w, float h,
-                             sf::Color fill, float corner_radius = 6.f);
+                             sf::Color fill);
+    void drawText(const std::string& str, float x, float y,
+                  unsigned int size, sf::Color col);
+
+    // ---- input helpers -----------------------------------------------------
+    void handleMouseMove(sf::Vector2f mp);
+    void handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap);
+    void buildActionButtons(const RenderSnapshot::EntitySnap& actor);
+    void buildTargetButtons(const RenderSnapshot& snap);
+    void buildInventoryButtons(const RenderSnapshot::EntitySnap& actor);
+    void buildLongTermButtons(const RenderSnapshot::EntitySnap& actor);
 
     // ---- members -----------------------------------------------------------
     sf::RenderWindow   m_window;
     sf::Texture        m_bg_texture;
     sf::Sprite         m_bg_sprite;
-    sf::Font           m_font;          // BlazeCircuit – Partner A's text
-    SpriteSheet        m_sprites;       // Partner B's sprite atlas
-
-    // Reusable shapes (avoid per-frame heap allocs)
+    sf::Font           m_font;
+    SpriteSheet        m_sprites;
     sf::RectangleShape m_rect;
     sf::Text           m_text;
+    sf::Clock          m_clock;
 
-    // Layout constants (computed once in constructor from window size)
-    float m_win_w;
-    float m_win_h;
-    float m_entity_panel_x;    // left edge of entity list panel
-    float m_entity_panel_w;    // width of entity list panel
-    float m_log_panel_x;
-    float m_log_panel_y;
-    float m_log_panel_w;
-    float m_log_panel_h;
-    float m_row_height;        // pixel height of one entity row
-    unsigned int m_font_size_normal;
-    unsigned int m_font_size_small;
+    float m_win_w = 1280.f;
+    float m_win_h = 720.f;
+
+    std::array<EntityAnim,   MAX_ENTITIES> m_anims;
+    std::array<sf::Vector2f, MAX_ENTITIES> m_entity_pos;  // card centre positions
+
+    enum class InputPhase {
+        NONE,
+        ACTION_MENU,
+        TARGET_SELECT,
+        INVENTORY_SELECT,
+        LONGTERM_SELECT,
+    };
+
+    InputPhase  m_phase          = InputPhase::NONE;
+    int         m_active_player  = -1;
+    ActionType  m_pending_action = ActionType::NONE;
+
+    std::vector<GuiButton> m_action_buttons;
+    std::vector<GuiButton> m_target_buttons;
+    std::vector<GuiButton> m_inventory_buttons;
+    std::vector<GuiButton> m_longterm_buttons;
+
+    GuiAction      m_pending_gui_action;
+    RenderSnapshot m_cached_snap;
+
+    static constexpr unsigned int kFontLg = 20u;
+    static constexpr unsigned int kFontMd = 15u;
+    static constexpr unsigned int kFontSm = 12u;
 };
