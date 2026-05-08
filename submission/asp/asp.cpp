@@ -34,28 +34,13 @@ void* stunWatcherThread(void* arg) {
             continue;
         }
 
+        // Reset the signal flag and acknowledge the stun signal.
+        // The Arbiter is the authority on stun state: it sets is_stunned = true
+        // directly on the target NPC in shared memory before sending SIGUSR1, and
+        // the scheduling loop already skips stunned entities. The ASP only needs
+        // to acknowledge the signal; it does not modify any entity's stun state.
         stun_signal_received = 0;
-
-        int target_idx = -1;
-        sem_wait(&g_state->global_mutex);
-        int player_count = g_state->player_count;
-        int npc_count = g_state->npc_count;
-        for (int i = player_count; i < player_count + npc_count; ++i) {
-            if (g_state->entities[i].is_my_turn) {
-                target_idx = i;
-                g_state->entities[i].is_stunned = true;
-                break;
-            }
-        }
-        sem_post(&g_state->global_mutex);
-
-        if (target_idx >= 0) {
-            struct timespec ts = {3, 0};
-            nanosleep(&ts, nullptr);
-            sem_wait(&g_state->global_mutex);
-            g_state->entities[target_idx].is_stunned = false;
-            sem_post(&g_state->global_mutex);
-        }
+        std::fprintf(stderr, "ASP: Acknowledged stun signal from Arbiter\n");
     }
 
     return nullptr;

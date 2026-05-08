@@ -532,47 +532,6 @@ void* deadlockMonitorThread(void* arg) {
 
         sem_wait(&state->global_mutex);
 
-        {
-            char debug_msg[ACTION_LOG_WIDTH] = {0};
-            int written = std::snprintf(debug_msg, sizeof(debug_msg), "Artifacts:");
-            for (int i = 0; i < MAX_ARTIFACTS; ++i) {
-                ArtifactEntry& artifact = state->artifacts[i];
-                if (!artifact.exists) {
-                    continue;
-                }
-
-                char wait_buf[64] = {0};
-                int wait_written = 0;
-                for (int e = 0; e < state->player_count + state->npc_count; ++e) {
-                    if (artifact.waiting[e]) {
-                        int add = std::snprintf(wait_buf + wait_written,
-                                                sizeof(wait_buf) - (size_t)wait_written,
-                                                "%s%d",
-                                                wait_written == 0 ? "" : ",",
-                                                e);
-                        if (add < 0 || (size_t)wait_written + (size_t)add >= sizeof(wait_buf)) {
-                            break;
-                        }
-                        wait_written += add;
-                    }
-                }
-                if (wait_written == 0) {
-                    std::snprintf(wait_buf, sizeof(wait_buf), "-");
-                }
-
-                if (written < (int)sizeof(debug_msg)) {
-                    written += std::snprintf(debug_msg + written,
-                                             sizeof(debug_msg) - (size_t)written,
-                                             " A%d(h=%d f=%d w=%s)",
-                                             i,
-                                             artifact.held_by,
-                                             artifact.is_free ? 1 : 0,
-                                             wait_buf);
-                }
-            }
-            appendLogUnsafe(state, debug_msg);
-        }
-
         bool resolved = false;
         for (int a = 0; a < MAX_ARTIFACTS && !resolved; ++a) {
             ArtifactEntry& artifact_a = state->artifacts[a];

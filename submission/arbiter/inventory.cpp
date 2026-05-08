@@ -111,6 +111,16 @@ void swapOutWeapon(Entity* entity, int start_index) {
     }
     entity->long_term_count++;
 
+    // Keep artifact holding flags in sync with inventory contents.
+    // These flags are read directly by the Ultimate Ability eligibility check.
+    if (std::strcmp(head.name, "Solar Core") == 0) {
+        entity->holds_solar_core = false;
+    } else if (std::strcmp(head.name, "Lunar Blade") == 0) {
+        entity->holds_lunar_blade = false;
+    } else if (std::strcmp(head.name, "Eclipse Relic") == 0) {
+        entity->holds_eclipse_relic = false;
+    }
+
     for (int i = 0; i < size; ++i) {
         clearSlot(entity->inventory[head_index + i]);
     }
@@ -129,6 +139,15 @@ void acquireWeapon(Entity* entity, const Weapon& weapon) {
     int start_index = findContiguousSlots(entity, size);
     if (start_index >= 0) {
         placeWeapon(entity, weapon, start_index);
+        // Keep artifact holding flags in sync with inventory contents.
+        // These flags are read directly by the Ultimate Ability eligibility check.
+        if (std::strcmp(weapon.name, "Solar Core") == 0) {
+            entity->holds_solar_core = true;
+        } else if (std::strcmp(weapon.name, "Lunar Blade") == 0) {
+            entity->holds_lunar_blade = true;
+        } else if (std::strcmp(weapon.name, "Eclipse Relic") == 0) {
+            entity->holds_eclipse_relic = true;
+        }
         return;
     }
 
@@ -190,5 +209,14 @@ void acquireWeapon(Entity* entity, const Weapon& weapon) {
     start_index = findContiguousSlots(entity, size);
     if (start_index >= 0) {
         placeWeapon(entity, weapon, start_index);
+        // Keep artifact holding flags in sync with inventory contents.
+        // These flags are read directly by the Ultimate Ability eligibility check.
+        if (std::strcmp(weapon.name, "Solar Core") == 0) {
+            entity->holds_solar_core = true;
+        } else if (std::strcmp(weapon.name, "Lunar Blade") == 0) {
+            entity->holds_lunar_blade = true;
+        } else if (std::strcmp(weapon.name, "Eclipse Relic") == 0) {
+            entity->holds_eclipse_relic = true;
+        }
     }
 }
