@@ -270,6 +270,9 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
     state->enemies_killed = 0;
     state->ultimate_active = false;
     state->log_head = 0;
+    state->pending_drop_offer = false;
+    state->pending_drop_name[0] = '\0';
+    state->pending_drop_for_player = -1;
 
     // Initialize artifacts
     std::strncpy(state->artifacts[0].name, "Solar Core", sizeof(state->artifacts[0].name));
@@ -663,11 +666,16 @@ void commitAction(GlobalState* state) {
                 target->is_alive = false;
                 if (!target->is_player) {
                     state->enemies_killed++;
-                    if (rand() % 2 == 0) {
+                    if (rand() % 2 == 0) {        
                         Weapon dropped = kDropWeapons[rand() % 8];
                         pending_drop_weapon = dropped;
                         pending_drop_for_player = actor_idx;
                         pending_drop_exists = true;
+                        state->pending_drop_offer = true;
+                        std::memset(state->pending_drop_name, 0, sizeof(state->pending_drop_name));
+                        std::strncpy(state->pending_drop_name, dropped.name, sizeof(state->pending_drop_name) - 1);
+                        state->pending_drop_name[sizeof(state->pending_drop_name) - 1] = '\0';
+                        state->pending_drop_for_player = actor_idx;
                         std::snprintf(msg, sizeof(msg), "Weapon dropped: %s (for actor %d)", pending_drop_weapon.name, pending_drop_for_player);
                         appendLogUnsafe(state, msg);
                     }
@@ -898,6 +906,7 @@ int main() {
     std::cout << "Arbiter: Starting Chrono Rift..." << std::endl;
 
     GlobalState* state = createSharedMemory();
+    state->arbiter_pid = getpid();
     initSemaphores(state);
 
     int roll_number;
@@ -934,21 +943,21 @@ int main() {
         cleanupAndExit(state, -1, -1);
     }
 
-    initscr();
-    cbreak();
-    noecho();
-    curs_set(0);
-    start_color();
-    init_pair(1, COLOR_GREEN, COLOR_BLACK);
-    init_pair(2, COLOR_RED, COLOR_BLACK);
-    init_pair(3, COLOR_YELLOW, COLOR_BLACK);
-    init_pair(4, COLOR_CYAN, COLOR_BLACK);
+    // initscr();
+    // cbreak();
+    // noecho();
+    // curs_set(0);
+    // start_color();
+    // init_pair(1, COLOR_GREEN, COLOR_BLACK);
+    // init_pair(2, COLOR_RED, COLOR_BLACK);
+    // init_pair(3, COLOR_YELLOW, COLOR_BLACK);
+    // init_pair(4, COLOR_CYAN, COLOR_BLACK);
 
-    pthread_t render_tid;
-    if (pthread_create(&render_tid, nullptr, renderThread, state) != 0) {
-        perror("pthread_create render thread failed");
-        cleanupAndExit(state, -1, -1);
-    }
+    // pthread_t render_tid;
+    // if (pthread_create(&render_tid, nullptr, renderThread, state) != 0) {
+    //     perror("pthread_create render thread failed");
+    //     cleanupAndExit(state, -1, -1);
+    // }
 
     pthread_t deadlock_tid;
     if (pthread_create(&deadlock_tid, nullptr, deadlockMonitorThread, state) != 0) {
@@ -969,7 +978,7 @@ int main() {
     schedulingLoop(state);
 
     state->game_running = false;
-    pthread_join(render_tid, nullptr);
+    // pthread_join(render_tid, nullptr);
     pthread_join(deadlock_tid, nullptr);
     cleanupAndExit(state, hip_pid, asp_pid);
     return 0;

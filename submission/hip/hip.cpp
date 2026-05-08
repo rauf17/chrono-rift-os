@@ -54,6 +54,49 @@ void* playerThread(void* arg) {
 
     while (state->game_running) {
         sem_wait(&state->global_mutex);
+        bool has_drop = state->pending_drop_offer && state->pending_drop_for_player == player_idx;
+        bool drop_ready = state->entities[player_idx].is_my_turn;
+        char drop_name[32] = {0};
+        if (has_drop && drop_ready) {
+            std::strncpy(drop_name, state->pending_drop_name, sizeof(drop_name) - 1);
+            drop_name[sizeof(drop_name) - 1] = '\0';
+            state->pending_drop_offer = false;
+            state->pending_drop_name[0] = '\0';
+            state->pending_drop_for_player = -1;
+        }
+        sem_post(&state->global_mutex);
+
+        if (has_drop) {
+            int pickup_choice = 0;
+            while (pickup_choice != 1 && pickup_choice != 2) {
+                pthread_mutex_lock(&input_mutex);
+                std::printf("Weapon dropped: %s. Pick it up? (1 = Yes, 2 = No)\n> ", drop_name);
+                char drop_input[64];
+                bool got = readLine(drop_input, sizeof(drop_input));
+                pthread_mutex_unlock(&input_mutex);
+                if (!got) {
+                    continue;
+                }
+                pickup_choice = std::atoi(drop_input);
+            }
+            sem_wait(&state->action_mutex);
+            state->action_buffer.actor_idx = player_idx;
+            state->action_buffer.target_idx = -1;
+            if (pickup_choice == 1) {
+                state->action_buffer.action = ActionType::USE_WEAPON;
+                state->action_buffer.weapon_slot = -2;
+            } else {
+                state->action_buffer.action = ActionType::SKIP;
+                state->action_buffer.weapon_slot = -1;
+            }
+            sem_post(&state->action_mutex);
+            sem_wait(&state->global_mutex);
+            state->entities[player_idx].action_ready = true;
+            sem_post(&state->global_mutex);
+            usleep(200000);
+        }
+
+        sem_wait(&state->global_mutex);
         bool my_turn = state->entities[player_idx].is_my_turn;
         sem_post(&state->global_mutex);
         if (!my_turn) {
@@ -304,90 +347,11 @@ void* playerThread(void* arg) {
         state->entities[player_idx].action_ready = true;
         sem_post(&state->global_mutex);
 
-        bool drop_offer = false;
-        char drop_name[32] = {0};
-        {
-            sem_wait(&state->global_mutex);
-            int log_head = state->log_head;
-            if (log_head > 0) {
-                int last_idx = (log_head - 1 + ACTION_LOG_LINES) % ACTION_LOG_LINES;
-                char last_log[ACTION_LOG_WIDTH];
-                std::strncpy(last_log, state->log[last_idx], sizeof(last_log) - 1);
-                last_log[sizeof(last_log) - 1] = '\0';
-
-                if (std::strstr(last_log, "dropped") != nullptr) {
-                    const char* name_start = std::strstr(last_log, "Weapon dropped: ");
-                    if (name_start) {
-                        name_start += std::strlen("Weapon dropped: ");
-                    } else {
-                        const char* colon = std::strchr(last_log, ':');
-                        if (colon) {
-                            name_start = colon + 1;
-                            while (*name_start == ' ') {
-                                ++name_start;
-                            }
-                        }
-                    }
-
-                    int drop_actor = player_idx;
-                    const char* actor_tag = std::strstr(last_log, "(for actor ");
-                    if (actor_tag) {
-                        drop_actor = std::atoi(actor_tag + std::strlen("(for actor "));
-                    }
-
-                    if (name_start && drop_actor == player_idx) {
-                        const char* name_end = std::strstr(name_start, " (");
-                        if (!name_end) {
-                            name_end = name_start + std::strlen(name_start);
-                        }
-                        size_t len = (name_end > name_start) ? (size_t)(name_end - name_start) : 0;
-                        if (len >= sizeof(drop_name)) {
-                            len = sizeof(drop_name) - 1;
-                        }
-                        std::strncpy(drop_name, name_start, len);
-                        drop_name[len] = '\0';
-                        if (drop_name[0] != '\0') {
-                            drop_offer = true;
-                        }
-                    }
-                }
-            }
-            sem_post(&state->global_mutex);
-        }
-
-        if (drop_offer) {
-            int pickup_choice = 0;
-            while (pickup_choice != 1 && pickup_choice != 2) {
-                pthread_mutex_lock(&input_mutex);
-                std::printf("Weapon dropped: %s. Pick it up? (1 = Yes, 2 = No)\n", drop_name);
-                std::printf("> ");
-                bool got_pickup = readLine(input, sizeof(input));
-                pthread_mutex_unlock(&input_mutex);
-                if (!got_pickup) {
-                    continue;
-                }
-                pickup_choice = std::atoi(input);
-            }
-
-            sem_wait(&state->action_mutex);
-            state->action_buffer.actor_idx = player_idx;
-            state->action_buffer.target_idx = -1;
-            if (pickup_choice == 1) {
-                state->action_buffer.action = ActionType::USE_WEAPON;
-                state->action_buffer.weapon_slot = -2;
-            } else {
-                state->action_buffer.action = ActionType::SKIP;
-                state->action_buffer.weapon_slot = -1;
-            }
-            sem_post(&state->action_mutex);
-
-            sem_wait(&state->global_mutex);
-            state->entities[player_idx].action_ready = true;
-            sem_post(&state->global_mutex);
-        }
-
         if (action == ActionType::QUIT) {
-            kill(getppid(), SIGTERM);
+            // Use the Arbiter PID stored in shared memory rather than getppid(),
+            // because process tree relationships may vary and getppid() may not
+            // always return the correct Arbiter PID.
+            kill(state->arbiter_pid, SIGTERM);
         }
     }
 

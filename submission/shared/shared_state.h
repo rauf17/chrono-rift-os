@@ -1,6 +1,7 @@
 #pragma once
 
 #include <semaphore.h>
+#include <sys/types.h>
 #include <cstdint>
 
 // This file defines the shared memory layout for the Chrono Rift game.
@@ -91,7 +92,11 @@ struct GlobalState {
     int current_turn_idx;            // Current turn - read by all, written by Arbiter
     int enemies_killed;              // Enemies killed - read by all, written by Arbiter
     bool ultimate_active;            // Ultimate active - read by all, written by Partner B
+    pid_t arbiter_pid;               // Arbiter PID - read by HIP/ASP, written by Arbiter
     ArtifactEntry artifacts[MAX_ARTIFACTS]; // Artifacts - read by all, written by Partner B
     char log[ACTION_LOG_LINES][ACTION_LOG_WIDTH]; // Action log - read by HIP, written by Arbiter
     int log_head;                    // Log head - read by Arbiter/HIP, written by Arbiter
+    bool pending_drop_offer;         // Pending weapon drop offer - written by Arbiter, read by HIP
+    char pending_drop_name[32];      // Name of the dropped weapon - written by Arbiter, read by HIP
+    int pending_drop_for_player;     // Index of the player who should be offered the drop - written by Arbiter, read by HIP
 };
