@@ -463,7 +463,7 @@ void checkGameConditions(GlobalState* state) {
         return;
     }
 
-    if (state->enemies_killed >= state->npc_count) {
+    if (state->enemies_killed >= 10) {
         appendLogUnsafe(state, "Victory -- all enemies defeated!");
         state->game_running = false;
     }
@@ -1103,6 +1103,12 @@ void commitAction(GlobalState* state) {
                 Entity* target = &state->entities[action.target_idx];
                 Weapon weapon = actor->inventory[action.weapon_slot];
                 target->hp -= weapon.damage;
+                if (!target->is_player && target->hp > 0) {
+                    target->speed *= 0.80f;
+                    if (target->speed < 5.f) {
+                        target->speed = 5.f;
+                    }
+                }
                 if (target->hp <= 0) {
                     target->hp = 0;
                     target->is_alive = false;

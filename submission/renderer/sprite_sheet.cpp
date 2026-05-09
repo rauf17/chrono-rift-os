@@ -91,15 +91,17 @@ void SpriteSheet::drawEntity(sf::RenderTarget& target,
         if (col < 0) col = 0;
         if (col > 3) col = 3;
         rect = getPlayerRect(col);
+        drawSprite(target, rect, pos, display_size);
     } else {
         // Enemies: cycle across columns 0-2 of row 1 (column 3 is empty).
         // entity_index here is the absolute entity index; we derive NPC-local
         // index by keeping modulo 3 so sprites cycle: Orc / Skeleton / Golem.
         int col = entity_index % 3;
         rect = getEnemyRect(col);
+        sf::Vector2f flipped_pos = {pos.x + display_size.x, pos.y};
+        sf::Vector2f flipped_size = {-display_size.x, display_size.y};
+        drawSprite(target, rect, flipped_pos, flipped_size);
     }
-
-    drawSprite(target, rect, pos, display_size);
 }
 
 // ---------------------------------------------------------------------------

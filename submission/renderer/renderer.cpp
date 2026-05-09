@@ -84,8 +84,8 @@ namespace C {
 
 // Card layout constants
 static constexpr float kCardW   = 190.f;
-static constexpr float kCardH   = 120.f;
-static constexpr float kCardGap = 8.f;
+static constexpr float kCardH   = 160.f;
+static constexpr float kCardGap = 20.f;
 static constexpr float kLeftX   = 20.f;
 static constexpr float kRightX  = 660.f;
 static constexpr float kStartY  = 100.f;
@@ -105,12 +105,12 @@ Renderer::Renderer(const std::string& assets_path,
                    const std::string& window_title)
     : m_sprites(assets_path + "/sprites/sprite.png")
 {
-    m_window.create(sf::VideoMode(1280, 720), window_title,
+    m_window.create(sf::VideoMode(1600, 900), window_title,
                     sf::Style::Titlebar | sf::Style::Close);
     m_window.setVerticalSyncEnabled(true);
     m_window.setFramerateLimit(60);
-    m_win_w = 1280.f;
-    m_win_h = 720.f;
+    m_win_w = 1600.f;
+    m_win_h = 900.f;
 
     if (!m_bg_texture.loadFromFile(assets_path + "/backgrounds/background2.png"))
         std::fprintf(stderr, "Renderer: background not found\n");
@@ -363,7 +363,7 @@ void Renderer::render(const RenderSnapshot& snap) {
 // drawBackground
 // ---------------------------------------------------------------------------
 void Renderer::drawBackground() {
-    m_bg_sprite.setColor(sf::Color(255, 255, 255, 130));
+    m_bg_sprite.setColor(sf::Color(255, 255, 255, 255));
     m_window.draw(m_bg_sprite);
 }
 
@@ -394,8 +394,6 @@ void Renderer::drawPanelBackground(float x, float y, float w, float h,
 // Players left column (x≈20), enemies right column (x≈660)
 // ---------------------------------------------------------------------------
 void Renderer::drawBattlefield(const RenderSnapshot& snap) {
-    drawText("CHRONO  RIFT", 12.f, 8.f, 28u, C::BORDER_GOLD);
-
     // Centre divider
     sf::RectangleShape div({2.f, m_win_h - 200.f});
     div.setPosition(m_win_w / 2.f, 45.f);
@@ -403,8 +401,8 @@ void Renderer::drawBattlefield(const RenderSnapshot& snap) {
                                 C::BORDER_GOLD.b, 80));
     m_window.draw(div);
 
-    drawText("PLAYERS", 80.f,  42.f, kFontMd, C::PLAYER_NAME);
-    drawText("ENEMIES", 830.f, 42.f, kFontMd, C::ENEMY_NAME);
+    drawText("PLAYERS", 270.f,  200.f, kFontMd, C::PLAYER_NAME);
+    drawText("ENEMIES", 1150.f, 200.f, kFontMd, C::ENEMY_NAME);
 
     int total = snap.player_count + snap.npc_count;
 
@@ -421,13 +419,13 @@ void Renderer::drawBattlefield(const RenderSnapshot& snap) {
     }
 
     int p_cols = (p_count > 3) ? 2 : 1;
-    int e_cols = (e_count > 5) ? 2 : 1;
+    int e_cols = 2;
 
     for (int idx = 0; idx < p_count; ++idx) {
         int row = idx / p_cols;
         int col = idx % p_cols;
-        float cx = kLeftX + col * (kCardW + kCardGap);
-        float cy = kStartY + row * (kCardH + kCardGap);
+        float cx = kLeftX + col * (kCardW + kCardGap) + 150.f;
+        float cy = 250.f + row * (kCardH + kCardGap);
         int ent_idx = player_ids[idx];
         const auto& ent = snap.entities[ent_idx];
 
@@ -442,8 +440,8 @@ void Renderer::drawBattlefield(const RenderSnapshot& snap) {
     for (int idx = 0; idx < e_count; ++idx) {
         int row = idx / e_cols;
         int col = idx % e_cols;
-        float cx = kRightX + col * (kCardW + kCardGap);
-        float cy = kStartY + row * (kCardH + kCardGap);
+        float cx = 1050.f + col * (kCardW + kCardGap);
+        float cy = 250.f + row * (kCardH + kCardGap);
         int ent_idx = enemy_ids[idx];
         const auto& ent = snap.entities[ent_idx];
 
@@ -468,35 +466,35 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
     const float H = kCardH;
     auto& anim = m_anims[entity_index];
 
-    // Card bg
-    sf::Color bg = ent.is_player ? C::PLAYER_BG : C::ENEMY_BG;
-    if (!ent.is_alive) bg = sf::Color(20, 20, 20, 160);
-    drawPanelBackground(pos.x, pos.y, W, H, bg);
-
-    // Turn highlight pulsing border
-    if (highlight && ent.is_alive) {
-        float pulse = 0.5f + 0.5f * std::sin(anim.pulse_t);
-        m_rect.setSize({W, H});
-        m_rect.setPosition(pos.x, pos.y);
-        m_rect.setFillColor(sf::Color(255, 230, 100,
-                                       (sf::Uint8)(20.f * pulse)));
-        m_rect.setOutlineThickness(2.5f);
-        m_rect.setOutlineColor(sf::Color(255, 230, 100,
-                                          (sf::Uint8)(80.f + 120.f * pulse)));
-        m_window.draw(m_rect);
-    }
-
     // Sprite with turn-pulse scale
     float scale_bump  = (highlight && ent.is_alive)
                         ? 1.f + 0.04f * std::sin(anim.pulse_t) : 1.f;
-    float sprite_base = 72.f;
+    float sprite_base = 110.f;
     float sprite_size = sprite_base * scale_bump;
     float sprite_x    = pos.x + (W - sprite_size) / 2.f;
-    float sprite_y    = pos.y + 4.f;
+    float sprite_y    = pos.y + 30.f;
+
+    sf::Color name_col = ent.is_player ? C::PLAYER_NAME : C::ENEMY_NAME;
+    if (!ent.is_alive) name_col = C::DEAD_COL;
+    drawText(ent.name, pos.x + 4.f, pos.y + 4.f, kFontSm, name_col);
 
     m_sprites.drawEntity(m_window, entity_index, ent.is_player,
                           {sprite_x, sprite_y},
                           {sprite_size, sprite_size});
+
+    if (highlight && ent.is_alive) {
+        sf::CircleShape ring(36.f);
+        ring.setOrigin(36.f, 36.f);
+        ring.setScale(1.f, 0.35f);
+        ring.setPosition(sprite_x + sprite_size / 2.f,
+                         sprite_y + sprite_size);
+        float pulse = 0.5f + 0.5f * std::sin(anim.pulse_t);
+        sf::Uint8 alpha = (sf::Uint8)(120 + 135.f * pulse);
+        ring.setFillColor(sf::Color::Transparent);
+        ring.setOutlineThickness(5.f);
+        ring.setOutlineColor(sf::Color(0, 255, 80, alpha));
+        m_window.draw(ring);
+    }
 
     // Hit flash overlay
     if (anim.hit_flash && anim.hit_flash_t > 0.f) {
@@ -540,32 +538,28 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
         m_window.draw(m_rect);
     }
 
-    // Name
-    sf::Color name_col = ent.is_player ? C::PLAYER_NAME : C::ENEMY_NAME;
-    if (!ent.is_alive) name_col = C::DEAD_COL;
-    drawText(ent.name, pos.x + 4.f, pos.y + 70.f, kFontSm, name_col);
-
     if (!ent.is_alive) {
         drawText("DEAD", pos.x + W / 2.f - 16.f, pos.y + H / 2.f - 8.f,
                  kFontMd, sf::Color(180, 30, 30, 200));
         return;
     }
 
-    // HP bar
-    drawHpBar(pos.x + 4.f, pos.y + 84.f, W - 8.f, 8.f, ent.hp, ent.max_hp);
+    float hp_y = pos.y + sprite_size + 40.f;
+    drawHpBar(pos.x + 4.f, hp_y, W * 0.6f, 8.f, ent.hp, ent.max_hp);
     char hpbuf[32];
     std::snprintf(hpbuf, sizeof(hpbuf), "%d/%d", ent.hp, ent.max_hp);
-    drawText(hpbuf, pos.x + 4.f, pos.y + 93.f, kFontSm - 1,
-             sf::Color(200, 200, 200, 200));
+    drawText(hpbuf, pos.x + 4.f, hp_y + 2.f, kFontSm - 1,
+             sf::Color(255, 255, 255, 220));
 
-    // Stamina bar
-    drawStaminaBar(pos.x + 4.f, pos.y + 104.f, W - 8.f, 6.f,
+    float stam_y = hp_y + 20.f;
+    drawStaminaBar(pos.x + 4.f, stam_y, W * 0.6f, 6.f,
                    ent.stamina, ent.max_stamina);
     int sp = ent.max_stamina > 0.f
              ? (int)(ent.stamina / ent.max_stamina * 100.f) : 0;
     char sbuf[16];
     std::snprintf(sbuf, sizeof(sbuf), "SP %d%%", sp);
-    drawText(sbuf, pos.x + W - 42.f, pos.y + 103.f, kFontSm - 2, C::STAM_COL);
+    drawText(sbuf, pos.x + W * 0.6f - 40.f, stam_y + 2.f,
+             kFontSm - 1, sf::Color(255, 255, 255, 220));
 
     // Status icons (turn arrow + stunned label)
     float icon_x = pos.x + 4.f;
@@ -789,27 +783,33 @@ static void drawButton(sf::RenderWindow& win, sf::RectangleShape& rect,
 
 void Renderer::buildActionButtons(const RenderSnapshot::EntitySnap& actor) {
     m_action_buttons.clear();
-    const float BW = 180.f, BH = 32.f, GAP = 5.f;
-    const float MX = (m_win_w - BW * 2.f - GAP) / 2.f;
-    const float MY = 480.f;
+    const float BW = 148.f, BH = 34.f, GAP = 6.f;
+    const float MX = (m_win_w - (BW * 4.f + GAP * 3.f)) / 2.f;
+    const float MY = 716.f;
 
     struct { const char* label; bool enabled; } acts[] = {
-        {"Strike",    true},
-        {"Exhaust",   true},
-        {"Heal",      true},
-        {"Skip",      true},
-        {"Use Weapon",true},
-        {"Swap In",   actor.long_term_count > 0},
-        {"Ultimate",  actor.holds_solar_core && actor.holds_lunar_blade},
-        {"Stun",      true},
-        {"Quit",      true},
+        {"Strike",     true},
+        {"Exhaust",    true},
+        {"Heal",       true},
+        {"Skip",       true},
+        {"Use Weapon", true},
+        {"Swap In",    actor.long_term_count > 0},
+        {"Ultimate",   actor.holds_solar_core && actor.holds_lunar_blade},
+        {"Stun",       true},
     };
-    for (int i = 0; i < 9; ++i) {
-        int col = i % 2, row = i / 2;
+
+    for (int i = 0; i < 8; ++i) {
+        int col = i % 4;
+        int row = i / 4;
         m_action_buttons.push_back(
             makeButton(MX + col * (BW + GAP), MY + row * (BH + GAP),
                        BW, BH, acts[i].label, acts[i].enabled));
     }
+
+    float quit_x = m_win_w / 2.f - BW / 2.f;
+    float quit_y = 804.f;
+    m_action_buttons.push_back(
+        makeButton(quit_x, quit_y, BW, BH, "Quit", true));
 }
 
 void Renderer::buildTargetButtons(const RenderSnapshot& snap) {
@@ -879,11 +879,32 @@ void Renderer::buildLongTermButtons(const RenderSnapshot::EntitySnap& actor) {
 // ---------------------------------------------------------------------------
 void Renderer::drawActionMenu(const RenderSnapshot& snap) {
     if (m_active_player < 0) return;
-    float panel_y = 540.f;
+    float panel_y = 700.f;
     drawPanelBackground(0.f, panel_y, m_win_w, m_win_h - panel_y, C::MENU_BG);
-    drawText("Choose Action:", 12.f, panel_y + 6.f, kFontMd, C::BORDER_GOLD);
-    for (auto& btn : m_action_buttons)
-        drawButton(m_window, m_rect, m_text, m_font, btn);
+    drawText("Choose Action:", 12.f, 704.f, kFontMd, C::BORDER_GOLD);
+    for (auto& btn : m_action_buttons) {
+        if (std::strcmp(btn.label.c_str(), "Quit") == 0) {
+            sf::Color fill = btn.hovered ? sf::Color(180, 50, 50, 255)
+                                          : sf::Color(120, 30, 30, 230);
+            m_rect.setSize({btn.bounds.width, btn.bounds.height});
+            m_rect.setPosition(btn.bounds.left, btn.bounds.top);
+            m_rect.setFillColor(fill);
+            m_rect.setOutlineThickness(1.5f);
+            m_rect.setOutlineColor(C::BORDER_GOLD);
+            m_window.draw(m_rect);
+            m_text.setFont(m_font);
+            m_text.setString(btn.label);
+            m_text.setCharacterSize(13u);
+            m_text.setFillColor(btn.enabled ? C::BTN_TEXT : C::DEAD_COL);
+            sf::FloatRect tb = m_text.getLocalBounds();
+            m_text.setPosition(
+                btn.bounds.left + (btn.bounds.width  - tb.width)  / 2.f,
+                btn.bounds.top  + (btn.bounds.height - tb.height) / 2.f - 2.f);
+            m_window.draw(m_text);
+        } else {
+            drawButton(m_window, m_rect, m_text, m_font, btn);
+        }
+    }
 }
 
 void Renderer::drawTargetOverlay(const RenderSnapshot& snap) {
