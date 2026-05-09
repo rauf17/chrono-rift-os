@@ -1423,6 +1423,31 @@ void Renderer::handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap) {
         return;
     }
 
+    // ---- LONG-TERM SELECT --------------------------------------------------
+    if (m_phase == InputPhase::LONGTERM_SELECT) {
+        const float BW = 230.f, MX = m_win_w/2.f - BW/2.f;
+        float by = 100.f;
+        for (auto& btn : m_longterm_buttons) {
+            sf::FloatRect dr{MX, by, BW, 34.f};
+            if (btn.enabled && dr.contains(mp)) {
+                m_pending_gui_action.ready       = true;
+                m_pending_gui_action.action      = ActionType::SWAP_IN;
+                m_pending_gui_action.target_idx  = -1;
+                m_pending_gui_action.weapon_slot = (int)btn.bounds.left;
+                m_phase = InputPhase::NONE;
+                return;
+            }
+            by += 40.f;
+        }
+        sf::FloatRect back{MX, by + 6.f, BW, 32.f};
+        if (back.contains(mp)) {
+            m_phase = InputPhase::ACTION_MENU;
+            buildActionButtons(snap.entities[m_active_player]);
+            m_pending_gui_action.weapon_slot = -1;
+        }
+        return;
+    }
+
     // ---- DROP OFFER --------------------------------------------------------
     if (m_phase == InputPhase::DROP_OFFER) {
         const float DW = 340.f, DH = 160.f;
