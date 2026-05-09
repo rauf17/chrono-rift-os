@@ -1,162 +1,136 @@
-# 🚀 Chrono Rift OS
+# ✨ Chrono-Rift-OS 🚀
 
-"Chrono Rift OS" is a sophisticated C++17 Linux game engineered to provide a practical, interactive demonstration of fundamental operating system concepts. This multi-process application leverages a suite of POSIX primitives, including shared memory, semaphores, pthreads, and robust signal handling, across three concurrently executing processes. Featuring an engaging `ncurses` Text-User Interface (TUI), this project transforms complex OS principles into a tangible, observable experience. It stands as an excellent educational resource for anyone looking to deepen their understanding of inter-process communication (IPC), concurrency management, and low-level system programming in a real-world context.
+This repository hosts `Chrono-Rift-OS`, a multi-process C++17 Linux game meticulously engineered to demonstrate fundamental operating system concepts. Developed with a focus on concurrency and inter-process communication, this project serves as an educational tool and a practical example of building a complex system using core OS primitives.
 
-## 🌟 Key Features
+**Key Concepts Explored:**
+*   **🐧 POSIX Shared Memory:** 💾 Facilitates efficient data exchange between concurrent processes, enabling a unified game state.
+*   **🚦 Semaphores:** Manages access to critical sections and synchronizes operations across processes, preventing race conditions.
+*   **🧵 Pthreads:** Utilized for multi-threading within processes, showcasing concurrent execution patterns.
+*   **🐚 ncurses TUI:** Provides a terminal-based user interface, offering an interactive gaming experience.
+*   **📡 Signal Handling:** Implements robust error handling and graceful termination mechanisms for inter-process communication.
 
-*   🎮 **Multi-Process Architecture**: Designed with three distinct, concurrently executing processes (`arbiter`, `asp`, `hip`) to simulate a distributed application.
-*   🧠 **POSIX Shared Memory**: Utilizes shared memory segments for efficient and direct data exchange between processes, demonstrating critical IPC mechanisms.
-*   🚦 **POSIX Semaphores**: Implements semaphores for robust synchronization, ensuring mutual exclusion and proper coordination when accessing shared resources.
-*   🧵 **POSIX Pthreads**: Explores concepts related to thread management and concurrency (implicitly, through the design of concurrent processes leveraging POSIX primitives).
-*   🚨 **Signal Handling**: Incorporates advanced signal handling mechanisms for graceful process termination, error management, and inter-process event notification.
-*   🖥️ **TUI Mode (ncurses)**: Provides an interactive Text-User Interface, offering a dynamic visual representation of game state and process interactions.
-*   🎨 **GUI Mode (SFML)**: Features an animated graphical interface with entity cards, clickable action menus, HP/stamina bars, sprite animations, and weapon drop dialogs.
-*   🛠️ **Modern C++17 Implementation**: Developed using contemporary C++ features for maintainability, performance, and best practices.
-*   🐳 **Dockerized Environment**: Ships with a Dockerfile for easy setup, ensuring a consistent and isolated execution environment across different systems.
+The game is structured around three concurrent processes—Arbiter, ASP, and HIP—each with distinct responsibilities, communicating to create a cohesive experience. This architecture provides a rich environment for understanding process lifecycle, synchronization, and resource management in a practical, game-oriented context.
 
-## 📐 Architecture Overview
+**Group Members:**
+*   Abdul Rauf
+*   Ahmad Bilal
 
-The Chrono Rift OS project is structured around three primary, distinct processes that communicate and synchronize using POSIX IPC mechanisms:
+## 🛠️ Installation Guide
 
-*   **Arbiter (`arbiter`)**:
-    The central control process. It manages the overall game state, player inventory, and artifact collection logic. The `arbiter` orchestrates interactions between the `asp` and `hip` processes, acting as the primary coordinator, utilizing shared memory and semaphores for state management and synchronization.
-*   **ASP (`asp`)**:
-    The "Artifact Search Process." This process is dedicated to simulating the search for game artifacts within the Chrono Rift environment. It communicates findings and requests for resources to the `arbiter`.
-*   **HIP (`hip`)**:
-    The "Hazard Identification Process." This process monitors for in-game hazards, events, or anomalies. It is responsible for detecting critical situations and relaying vital information back to the `arbiter` for appropriate action.
+This project can be set up and run using two primary methods: via Docker for a consistent environment, or by building natively on a Linux system.
 
-**Shared State**: All processes interact with a common memory region, defined by `shared_state.h`, which serves as the central data store. Access to this shared memory is strictly controlled by POSIX semaphores to prevent race conditions and ensure data integrity.
+### 🐳 Method 1: Using Docker (Recommended)
 
-## ⚙️ Technical Stack
+Docker provides an isolated and consistent environment, ensuring all dependencies are met without affecting your host system.
 
-*   **Primary Language**: C++17
-*   **Build System**: GNU Make
-*   **Core Libraries**: POSIX (for IPC, Pthreads, Signals), `ncurses`, SFML
-*   **Containerization**: Docker
+1.  **📦 Prerequisites:**
+    *   Ensure Docker is installed on your system. You can download it from [docker.com](https://www.docker.com/get-started).
 
-## 📂 File Structure
-
-The repository is organized as follows:
-
-```
-.
-├── README.md
-├── submission/
-│   ├── Dockerfile                           # Defines the Docker image build process
-│   ├── Makefile                             # Manages the compilation and linking of all processes
-│   ├── arbiter/                             # Source code and build artifacts for the Arbiter process
-│   │   ├── arbiter                          # Compiled executable for the Arbiter
-│   │   ├── arbiter.cpp                      # Main implementation of the Arbiter's logic
-│   │   ├── arbiter.o                        # Object file for arbiter.cpp
-│   │   ├── artifact_manager.cpp             # Implements artifact management logic
-│   │   ├── artifact_manager.h               # Header for artifact_manager.cpp
-│   │   ├── inventory.cpp                    # Implements player inventory management
-│   │   └── inventory.h                      # Header for inventory.cpp
-│   ├── asp/                                 # Source code and build artifacts for the Artifact Search Process
-│   │   ├── asp                              # Compiled executable for the ASP
-│   │   └── asp.cpp                          # Main implementation of the ASP's logic
-│   ├── hip/                                 # Source code and build artifacts for the Hazard Identification Process
-│   │   ├── hip                              # Compiled executable for the HIP
-│   │   └── hip.cpp                          # Main implementation of the HIP's logic
-│   └── shared/                              # Shared headers and definitions for inter-process communication
-│       └── shared_state.h                   # Defines the structure of the shared memory segment
-└── ...
-```
-
-## 🚀 Installation
-
-To get Chrono Rift OS up and running, choose your preferred method below.
-
-### 📋 Prerequisites
-
-*   **Git**: Required to clone the repository.
-*   **Docker** (Recommended for ease of setup) OR
-*   **GNU C++ Compiler (g++ C++17 compatible)** and **GNU Make** (For building from source).
-
-### ⬇️ Clone the Repository
-
-Begin by cloning the project repository to your local machine:
-
-```bash
-git clone https://github.com/your-username/chrono-rift-os.git
-cd chrono-rift-os/submission
-```
-
-### 🐳 Option 1: Using Docker (Recommended)
-
-Docker provides a consistent and isolated environment, simplifying the setup process.
-
-1.  **Build the Docker Image**:
-    Navigate to the `submission` directory and build the Docker image. This process compiles the application within the Docker container.
-    ```bash
-    docker build -t chrono-rift-os .
-    ```
-2.  The `chrono-rift-os` Docker image is now ready for execution.
-
-### 🔧 Option 2: Building from Source
-
-If you prefer to compile and run the application directly on your system:
-
-1.  **Install Dependencies**: Ensure you have `g++` (C++17 compatible) and `make` installed. You may also need `ncurses` development libraries (e.g., `libncurses-dev` on Debian/Ubuntu).
-    ```bash
-    # Example for Debian/Ubuntu
-    sudo apt update
-    sudo apt install build-essential libncurses-dev
-    ```
-2.  **Navigate to the `submission` directory**:
+2.  **➡️ Navigate to the Submission Directory:**
     ```bash
     cd submission
     ```
-3.  **Compile the Project**:
-    Use the provided `Makefile` to compile all processes:
+
+3.  **⬆️ Build the Docker Image:**
+    This command will build the Docker image named `chrono-rift-os-image` based on the `Dockerfile` in the `submission` directory.
+    ```bash
+    docker build -t chrono-rift-os-image .
+    ```
+
+4.  **🔗 Run the Docker Container:**
+    Once the image is built, you can run the application. The `-it` flags provide an interactive terminal, and `--rm` ensures the container is removed after exit.
+    ```bash
+    docker run -it --rm chrono-rift-os-image
+    ```
+    The application will launch directly within the Docker container's terminal.
+
+### 💻 Method 2: Native Build (Linux)
+
+For developers who prefer to compile and run the project directly on their Linux machine.
+
+1.  **📦 Prerequisites:**
+    *   A C++17 compatible compiler (e.g., g++).
+    *   `make` utility.
+    *   `ncurses` development libraries:
+        *   On Debian/Ubuntu: `sudo apt-get install build-essential libncurses-dev`
+        *   On Fedora: `sudo dnf install @development-tools ncurses-devel`
+        *   On Arch Linux: `sudo pacman -S base-devel ncurses`
+
+2.  **➡️ Navigate to the Submission Directory:**
+    ```bash
+    cd submission
+    ```
+
+3.  **⬆️ Compile the Project:**
+    Use the provided `Makefile` to compile all executables.
     ```bash
     make
     ```
-    This command will generate the `arbiter`, `asp`, and `hip` executables within their respective directories (`./arbiter/`, `./asp/`, `./hip/`).
+    This command will generate the `arbiter`, `asp`, and `hip` executables in their respective directories (`submission/arbiter`, `submission/asp`, `submission/hip`).
 
-## ▶️ Usage
+## ▶️ Usage Guide
 
-Once installed, you can launch Chrono Rift OS using either Docker or directly from the compiled executables.
+Once the project is successfully built (either via Docker or natively), you can launch the game.
 
-### 🐳 Option 1: Running with Docker
+### 🕹️ Running the Application
 
-Execute the Docker image to start the game:
+*   **If running via Docker:**
+    The application will automatically launch upon executing the `docker run` command as described in the installation section. You will be greeted by the `ncurses` TUI.
 
-```bash
-docker run -it --rm chrono-rift-os
-```
+*   **If running natively:**
+    After compiling with `make` in the `submission` directory, you can execute the `arbiter` process. The `arbiter` is responsible for spawning and managing the other processes (`asp` and `hip`).
 
-*   The `-it` flags are crucial for interacting with the `ncurses` Text-User Interface.
-*   The `--rm` flag automatically cleans up the container upon exit.
+    1.  **➡️ Navigate to the Submission Directory:**
+        ```bash
+        cd submission
+        ```
+    2.  **🚀 Execute the Arbiter:**
+        ```bash
+        ./arbiter/arbiter
+        ```
+        This will initiate the game. The `arbiter` will fork and exec the `asp` (Application Specific Process) and `hip` (High-level Interface Process), establishing shared memory and semaphore connections.
 
-### ⚙️ Option 2: Running from Source
+### 👁️ Game Interface (ncurses TUI)
 
-1.  **Navigate to the `submission` directory**:
-    ```bash
-    cd submission
-    ```
-2.  **Launch the Arbiter**:
-    Start the main `arbiter` process. The `arbiter` is responsible for launching and managing the `asp` and `hip` processes, initiating the multi-process game environment. You will be prompted to choose between TUI (ncurses) or GUI (SFML) display modes. In GUI mode, only the ASP process is launched since player input is handled directly by the graphical interface.
-    ```bash
-    ./arbiter/arbiter
-    ```
-3.  The `ncurses` TUI should initialize, presenting the game's interface in your terminal.
+The game features a text-based user interface developed with `ncurses`.
+*   Expect a split-screen layout or various windows displaying game state, player information, and potential interaction prompts.
+*   Use standard terminal controls (e.g., arrow keys, 'q' to quit, 'WASD') if applicable, though specific controls will depend on the game's design.
+*   Observe how different processes contribute to the visual output and game logic, all orchestrated through POSIX IPC.
 
-**Termination**: To gracefully exit the game, typically pressing `Ctrl+C` in the terminal where the `arbiter` is running will trigger the implemented signal handling mechanisms to shut down all concurrent processes.
+### 💬 Interacting with the Game
+
+The `chrono-rift-os` experience showcases the dynamic interplay between the three processes:
+*   The `arbiter` manages game resources and orchestrates overall flow.
+*   The `asp` might handle core game logic, calculations, or AI.
+*   The `hip` likely manages user input and renders the game state to the `ncurses` display.
+*   Experiment with different inputs if the game allows, and observe the system's responsiveness and how signals/semaphores ensure consistent state.
 
 ## 🤝 Contributing
 
-Contributions are welcome and greatly appreciated! If you have suggestions for improvements, bug reports, or want to add new features, please follow these guidelines:
+We welcome contributions to `chrono-rift-os`! Whether you're interested in adding new features, improving existing code, or refining documentation, your input is highly valued.
 
-1.  📝 **Fork the Repository**: Start by forking the `chrono-rift-os` repository to your GitHub account.
-2.  ✨ **Create a New Branch**: Create a new branch for your feature or bug fix:
-    ```bash
-    git checkout -b feature/your-feature-name
-    ```
-3.  💡 **Implement Your Changes**: Make your modifications, ensuring adherence to the project's coding style and C++17 standards.
-4.  ⬆️ **Commit and Push**: Commit your changes with a clear, descriptive message and push them to your forked repository:
-    ```bash
-    git commit -m 'feat: Add a new feature or fix a bug'
-    git push origin feature/your-feature-name
-    ```
-5.  ✉️ **Open a Pull Request**: Submit a pull request to the `main` branch of the original `chrono-rift-os` repository. Provide a detailed description of your changes.
+### 🐞 Bug Reports
+
+If you discover any issues or unexpected behavior:
+*   Open an issue on the GitHub repository.
+*   Clearly describe the bug, including steps to reproduce it.
+*   Provide any relevant error messages or console output.
+
+### 💡 Feature Requests
+
+Have an idea for an enhancement or a new feature?
+*   Open an issue on the GitHub repository.
+*   Describe your proposed feature and its potential benefits.
+
+### 📥 Code Contributions
+
+We encourage pull requests for bug fixes, new features, or performance improvements.
+1.  **📝 Fork** the repository.
+2.  **🌿 Create a new branch** for your changes (e.g., `feature/my-new-feature` or `fix/bug-description`).
+3.  **💻 Make your changes** and ensure they adhere to the existing coding style.
+4.  **🧪 Test your changes** thoroughly.
+5.  **⬆️ Commit your changes** with clear, concise commit messages.
+6.  **🚀 Push your branch** to your forked repository.
+7.  **🔄 Open a Pull Request** to the `main` branch of the original repository.
+    *   Provide a detailed description of your changes.
+    *   Reference any related issues.
