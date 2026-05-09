@@ -1,0 +1,19 @@
+on your host:
+
+cd ~/chrono-rift-os
+sudo docker run -it --rm \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v $(pwd):/app \
+  chrono-rift-env
+
+
+
+
+
+
+Then inside the container:
+
+cd /app/submission
+make clean && make
+./arbiter/arbiter
