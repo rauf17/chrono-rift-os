@@ -112,7 +112,7 @@ Renderer::Renderer(const std::string& assets_path,
     m_win_w = 1280.f;
     m_win_h = 720.f;
 
-    if (!m_bg_texture.loadFromFile(assets_path + "/backgrounds/dungeon.png"))
+    if (!m_bg_texture.loadFromFile(assets_path + "/backgrounds/background.png"))
         std::fprintf(stderr, "Renderer: background not found\n");
     m_bg_texture.setSmooth(false);
     m_bg_sprite.setTexture(m_bg_texture);
