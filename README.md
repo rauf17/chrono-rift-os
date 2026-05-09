@@ -9,7 +9,8 @@
 *   🚦 **POSIX Semaphores**: Implements semaphores for robust synchronization, ensuring mutual exclusion and proper coordination when accessing shared resources.
 *   🧵 **POSIX Pthreads**: Explores concepts related to thread management and concurrency (implicitly, through the design of concurrent processes leveraging POSIX primitives).
 *   🚨 **Signal Handling**: Incorporates advanced signal handling mechanisms for graceful process termination, error management, and inter-process event notification.
-*   🖥️ **`ncurses` TUI**: Provides an interactive Text-User Interface, offering a dynamic visual representation of game state and process interactions.
+*   🖥️ **TUI Mode (ncurses)**: Provides an interactive Text-User Interface, offering a dynamic visual representation of game state and process interactions.
+*   🎨 **GUI Mode (SFML)**: Features an animated graphical interface with entity cards, clickable action menus, HP/stamina bars, sprite animations, and weapon drop dialogs.
 *   🛠️ **Modern C++17 Implementation**: Developed using contemporary C++ features for maintainability, performance, and best practices.
 *   🐳 **Dockerized Environment**: Ships with a Dockerfile for easy setup, ensuring a consistent and isolated execution environment across different systems.
 
@@ -30,7 +31,7 @@ The Chrono Rift OS project is structured around three primary, distinct processe
 
 *   **Primary Language**: C++17
 *   **Build System**: GNU Make
-*   **Core Libraries**: POSIX (for IPC, Pthreads, Signals), `ncurses`
+*   **Core Libraries**: POSIX (for IPC, Pthreads, Signals), `ncurses`, SFML
 *   **Containerization**: Docker
 
 ## 📂 File Structure
@@ -135,7 +136,7 @@ docker run -it --rm chrono-rift-os
     cd submission
     ```
 2.  **Launch the Arbiter**:
-    Start the main `arbiter` process. The `arbiter` is responsible for launching and managing the `asp` and `hip` processes, initiating the multi-process game environment.
+    Start the main `arbiter` process. The `arbiter` is responsible for launching and managing the `asp` and `hip` processes, initiating the multi-process game environment. You will be prompted to choose between TUI (ncurses) or GUI (SFML) display modes. In GUI mode, only the ASP process is launched since player input is handled directly by the graphical interface.
     ```bash
     ./arbiter/arbiter
     ```
