@@ -77,11 +77,15 @@ void* npcThread(void* arg) {
     while (state->game_running) {
         usleep(100000); // Poll every 100ms for this NPC's turn
 
-        // Avoid data races on is_my_turn by reading it under the global mutex.
+        // Avoid data races on entity state by reading it under the global mutex.
         sem_wait(&state->global_mutex);
         bool my_turn = state->entities[npc_idx].is_my_turn;
         bool is_stunned = state->entities[npc_idx].is_stunned;
+        bool is_alive = state->entities[npc_idx].is_alive;
         sem_post(&state->global_mutex);
+        if (!is_alive) {
+            return nullptr;
+        }
         if (is_stunned) {
             usleep(100000);
             continue;

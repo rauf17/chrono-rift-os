@@ -99,4 +99,5 @@ struct GlobalState {
     bool pending_drop_offer;         // Pending weapon drop offer - written by Arbiter, read by HIP
     char pending_drop_name[32];      // Name of the dropped weapon - written by Arbiter, read by HIP
     int pending_drop_for_player;     // Index of the player who should be offered the drop - written by Arbiter, read by HIP
+    bool eclipse_relic_dropped;      // Set when the eclipse relic has appeared and should drop
 };

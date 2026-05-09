@@ -277,6 +277,7 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
     state->pending_drop_offer = false;
     state->pending_drop_name[0] = '\0';
     state->pending_drop_for_player = -1;
+    state->eclipse_relic_dropped = false;
 
     // Initialize artifacts
     std::strncpy(state->artifacts[0].name, "Solar Core", sizeof(state->artifacts[0].name));
@@ -901,6 +902,7 @@ void commitAction(GlobalState* state) {
     static const Weapon kDropWeapons[] = {
         {"Solar Core", 10, 95, true, false},
         {"Lunar Blade", 10, 90, true, false},
+        {"Eclipse Relic", 10, 100, true, false},
         {"Iron Halberd", 7, 55, false, false},
         {"Venom Dagger", 4, 30, false, false},
         {"Thunderstaff", 6, 50, false, false},
@@ -981,7 +983,16 @@ void commitAction(GlobalState* state) {
                 target->is_alive = false;
                 if (!target->is_player) {
                     state->enemies_killed++;
-                    if (rand() % 2 == 0) {        
+
+                    bool has_inventory_weapon = false;
+                    for (int i = 0; i < INVENTORY_SLOTS; ++i) {
+                        if (target->inventory[i].occupied) {
+                            has_inventory_weapon = true;
+                            break;
+                        }
+                    }
+
+                    if (!has_inventory_weapon && rand() % 2 == 0) {
                         Weapon dropped = kDropWeapons[rand() % 8];
                         pending_drop_weapon = dropped;
                         pending_drop_for_player = actor_idx;
@@ -1220,6 +1231,31 @@ void commitAction(GlobalState* state) {
 
     if (introduce_relic) {
         introduceEclipseRelic(state);
+    }
+
+    if (state->eclipse_relic_dropped && !state->pending_drop_offer) {
+        int first_alive_player = -1;
+        for (int i = 0; i < state->player_count; ++i) {
+            if (state->entities[i].is_alive) {
+                first_alive_player = i;
+                break;
+            }
+        }
+        if (first_alive_player >= 0) {
+            pending_drop_weapon = {"Eclipse Relic", 10, 100, true, false};
+            pending_drop_exists = true;
+            pending_drop_for_player = first_alive_player;
+            state->pending_drop_offer = true;
+            std::memset(state->pending_drop_name, 0, sizeof(state->pending_drop_name));
+            std::strncpy(state->pending_drop_name, pending_drop_weapon.name,
+                         sizeof(state->pending_drop_name) - 1);
+            state->pending_drop_name[sizeof(state->pending_drop_name) - 1] = '\0';
+            state->pending_drop_for_player = first_alive_player;
+            state->eclipse_relic_dropped = false;
+            std::snprintf(msg, sizeof(msg), "Eclipse Relic dropped: %s (for actor %d)",
+                          pending_drop_weapon.name, pending_drop_for_player);
+            appendLogUnsafe(state, msg);
+        }
     }
 }
 

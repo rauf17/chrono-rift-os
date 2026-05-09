@@ -76,6 +76,7 @@ void introduceEclipseRelic(GlobalState* state) {
     entry.exists = true;
     entry.is_free = true;
     entry.held_by = -1;
+    state->eclipse_relic_dropped = true;
     appendLogUnsafeLocal(state, "The Eclipse Relic has appeared.");
     sem_post(&state->global_mutex);
 }
