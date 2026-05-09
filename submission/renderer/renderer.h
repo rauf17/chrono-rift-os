@@ -139,7 +139,8 @@ private:
     void drawBackground();
     void drawBattlefield(const RenderSnapshot& snap);
     void drawEntityCard(const RenderSnapshot::EntitySnap& ent,
-                        int entity_index, sf::Vector2f pos, bool highlight);
+                        int entity_index, sf::Vector2f pos, bool highlight,
+                        const char* override_name = nullptr);
     void drawFloatingWeapons();
 
     // Draw helpers (private)
@@ -156,7 +157,8 @@ private:
     void drawPanelBackground(float x, float y, float w, float h,
                              sf::Color fill);
     void drawText(const std::string& str, float x, float y,
-                  unsigned int size, sf::Color col);
+                  unsigned int size, sf::Color col,
+                  sf::Color outline = sf::Color::Black);
 
     // ---- input helpers -----------------------------------------------------
     void handleMouseMove(sf::Vector2f mp);

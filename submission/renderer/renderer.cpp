@@ -65,9 +65,11 @@ namespace C {
     static const sf::Color BORDER_GOLD {110, 80,  30,  255};
     static const sf::Color PLAYER_BG   {20,  40,  70,  200};
     static const sf::Color ENEMY_BG    {60,  20,  20,  200};
-    static const sf::Color PLAYER_NAME {180, 220, 255, 255};
-    static const sf::Color ENEMY_NAME  {255, 150, 90,  255};
-    static const sf::Color DEAD_COL    {80,  80,  80,  160};
+    static const sf::Color PLAYER_NAME    {120, 220, 255, 255};
+    static const sf::Color PLAYER_OUTLINE {10,  20,  40, 255};
+    static const sf::Color ENEMY_NAME     {255, 150,  60, 255};
+    static const sf::Color ENEMY_OUTLINE  {40,  10,   0, 255};
+    static const sf::Color DEAD_COL       {80,  80,  80,  160};
     static const sf::Color HP_HIGH     {200, 40,  40,  255};
     static const sf::Color HP_LOW      {255, 120, 0,   255};
     static const sf::Color HP_BG       {35,  10,  10,  200};
@@ -368,14 +370,15 @@ void Renderer::drawBackground() {
 }
 
 void Renderer::drawText(const std::string& str, float x, float y,
-                         unsigned int size, sf::Color col)
+                         unsigned int size, sf::Color col,
+                         sf::Color outline)
 {
     m_text.setFont(m_font);
     m_text.setString(str);
     m_text.setCharacterSize(size);
     m_text.setFillColor(col);
     m_text.setPosition(x, y);
-    m_text.setOutlineColor(sf::Color::Black);
+    m_text.setOutlineColor(outline);
     m_text.setOutlineThickness(2.f);
     m_window.draw(m_text);
     m_text.setStyle(sf::Text::Bold);
@@ -404,8 +407,10 @@ void Renderer::drawBattlefield(const RenderSnapshot& snap) {
                                 C::BORDER_GOLD.b, 80));
     m_window.draw(div);
 
-    drawText("PLAYERS", 270.f,  200.f, kFontMd, C::PLAYER_NAME);
-    drawText("ENEMIES", 1150.f, 200.f, kFontMd, C::ENEMY_NAME);
+    drawText("PLAYERS", 270.f,  200.f, kFontMd, C::PLAYER_NAME,
+             C::PLAYER_OUTLINE);
+    drawText("ENEMIES", 1150.f, 200.f, kFontMd, C::ENEMY_NAME,
+             C::ENEMY_OUTLINE);
 
     int total = snap.player_count + snap.npc_count;
 
@@ -435,9 +440,17 @@ void Renderer::drawBattlefield(const RenderSnapshot& snap) {
         // Store card centre for animation position interpolation
         m_entity_pos[ent_idx] = {cx + kCardW / 2.f, cy + kCardH / 2.f};
 
+        const char* override_name = nullptr;
+        if (p_cols == 2 && p_count > 1 && (idx == 0 || idx == 1 || idx == 2 || idx == 3)) {
+            int swap_idx = (idx % 2 == 0) ? idx + 1 : idx - 1;
+            if (swap_idx < p_count)
+                override_name = snap.entities[player_ids[swap_idx]].name;
+        }
+
         float draw_x = cx + m_anims[ent_idx].attack_dx;
         drawEntityCard(ent, ent_idx, {draw_x, cy},
-                       snap.current_turn_idx == ent_idx);
+                       snap.current_turn_idx == ent_idx,
+                       override_name);
     }
 
     for (int idx = 0; idx < e_count; ++idx) {
@@ -463,7 +476,8 @@ void Renderer::drawBattlefield(const RenderSnapshot& snap) {
 void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
                                int entity_index,
                                sf::Vector2f pos,
-                               bool highlight)
+                               bool highlight,
+                               const char* override_name)
 {
     const float W = kCardW;
     const float H = kCardH;
@@ -479,7 +493,9 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
 
     sf::Color name_col = ent.is_player ? C::PLAYER_NAME : C::ENEMY_NAME;
     if (!ent.is_alive) name_col = C::DEAD_COL;
-    drawText(ent.name, pos.x + 4.f, pos.y + 20.f, kFontSm, name_col);
+    drawText(override_name ? override_name : ent.name,
+             pos.x + 4.f, pos.y + 20.f, kFontSm, name_col,
+             ent.is_player ? C::PLAYER_OUTLINE : C::ENEMY_OUTLINE);
 
     m_sprites.drawEntity(m_window, entity_index, ent.is_player,
                           {sprite_x, sprite_y},
