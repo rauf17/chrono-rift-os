@@ -129,6 +129,9 @@ public:
     void triggerStunFlash(int target_idx);
     void triggerDeath(int entity_idx);
 
+    // Show a weapon drop pickup dialog for a player.
+    void showDropOffer(int player_idx, const char* weapon_name);
+
     void stepAnimations(float dt_seconds);
 
 private:
@@ -138,6 +141,9 @@ private:
     void drawEntityCard(const RenderSnapshot::EntitySnap& ent,
                         int entity_index, sf::Vector2f pos, bool highlight);
     void drawFloatingWeapons();
+
+    // Draw helpers (private)
+    void drawDropOfferDialog();
     void drawHpBar(float x, float y, float w, float h, int hp, int max_hp);
     void drawStaminaBar(float x, float y, float w, float h,
                         float stamina, float max_stamina);
@@ -182,6 +188,7 @@ private:
         TARGET_SELECT,
         INVENTORY_SELECT,
         LONGTERM_SELECT,
+        DROP_OFFER,       // showing pickup Y/N dialog for a weapon drop
     };
 
     InputPhase  m_phase          = InputPhase::NONE;
@@ -195,6 +202,10 @@ private:
 
     GuiAction      m_pending_gui_action;
     RenderSnapshot m_cached_snap;
+
+    // Drop offer dialog state
+    char  m_drop_weapon_name[32] = {};
+    int   m_drop_for_player      = -1;
 
     static constexpr unsigned int kFontLg = 20u;
     static constexpr unsigned int kFontMd = 15u;

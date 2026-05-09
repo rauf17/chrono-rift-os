@@ -82,6 +82,22 @@ namespace C {
     static const sf::Color MENU_BG     {12,  16,  30,  240};
 }
 
+// Card layout constants
+static constexpr float kCardW   = 190.f;
+static constexpr float kCardH   = 120.f;
+static constexpr float kCardGap = 8.f;
+static constexpr float kLeftX   = 20.f;
+static constexpr float kRightX  = 660.f;
+static constexpr float kStartY  = 100.f;
+
+// Forward declarations for helpers used before definition.
+static GuiButton makeButton(float x, float y, float w, float h,
+                             const std::string& label,
+                             bool enabled = true);
+static void drawButton(sf::RenderWindow& win, sf::RectangleShape& rect,
+                        sf::Text& text, sf::Font& font,
+                        const GuiButton& btn);
+
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
@@ -332,10 +348,11 @@ void Renderer::render(const RenderSnapshot& snap) {
     // Floating weapon icons drawn on top of all cards
     drawFloatingWeapons();
 
-    if (m_phase == InputPhase::ACTION_MENU)     drawActionMenu(snap);
+    if (m_phase == InputPhase::ACTION_MENU)          drawActionMenu(snap);
     else if (m_phase == InputPhase::TARGET_SELECT)   drawTargetOverlay(snap);
     else if (m_phase == InputPhase::INVENTORY_SELECT) drawInventoryMenu(snap);
     else if (m_phase == InputPhase::LONGTERM_SELECT)  drawLongTermMenu(snap);
+    else if (m_phase == InputPhase::DROP_OFFER)       drawDropOfferDialog();
 
     if (snap.ultimate_active) drawUltimateOverlay();
     drawStatusBar(snap);
@@ -380,7 +397,7 @@ void Renderer::drawBattlefield(const RenderSnapshot& snap) {
     drawText("CHRONO  RIFT", 12.f, 8.f, 28u, C::BORDER_GOLD);
 
     // Centre divider
-    sf::RectangleShape div({2.f, m_win_h - 160.f});
+    sf::RectangleShape div({2.f, m_win_h - 200.f});
     div.setPosition(m_win_w / 2.f, 45.f);
     div.setFillColor(sf::Color(C::BORDER_GOLD.r, C::BORDER_GOLD.g,
                                 C::BORDER_GOLD.b, 80));
@@ -389,34 +406,53 @@ void Renderer::drawBattlefield(const RenderSnapshot& snap) {
     drawText("PLAYERS", 80.f,  42.f, kFontMd, C::PLAYER_NAME);
     drawText("ENEMIES", 830.f, 42.f, kFontMd, C::ENEMY_NAME);
 
-    const float CARD_W   = 190.f;
-    const float CARD_H   = 130.f;
-    const float CARD_GAP =  10.f;
-    const float LEFT_X   =  20.f;
-    const float RIGHT_X  = 660.f;
-    const float START_Y  =  64.f;
-
-    int p_row = 0, e_row = 0;
     int total = snap.player_count + snap.npc_count;
 
+    int player_ids[MAX_ENTITIES] = {};
+    int enemy_ids[MAX_ENTITIES]  = {};
+    int p_count = 0;
+    int e_count = 0;
+
     for (int i = 0; i < total && i < MAX_ENTITIES; ++i) {
-        const auto& ent = snap.entities[i];
-        float cx, cy;
-        if (ent.is_player) {
-            cx = LEFT_X;
-            cy = START_Y + p_row * (CARD_H + CARD_GAP);
-            ++p_row;
-        } else {
-            cx = RIGHT_X;
-            cy = START_Y + e_row * (CARD_H + CARD_GAP);
-            ++e_row;
-        }
+        if (snap.entities[i].is_player)
+            player_ids[p_count++] = i;
+        else
+            enemy_ids[e_count++] = i;
+    }
+
+    int p_cols = (p_count > 3) ? 2 : 1;
+    int e_cols = (e_count > 5) ? 2 : 1;
+
+    for (int idx = 0; idx < p_count; ++idx) {
+        int row = idx / p_cols;
+        int col = idx % p_cols;
+        float cx = kLeftX + col * (kCardW + kCardGap);
+        float cy = kStartY + row * (kCardH + kCardGap);
+        int ent_idx = player_ids[idx];
+        const auto& ent = snap.entities[ent_idx];
 
         // Store card centre for animation position interpolation
-        m_entity_pos[i] = {cx + CARD_W / 2.f, cy + CARD_H / 2.f};
+        m_entity_pos[ent_idx] = {cx + kCardW / 2.f, cy + kCardH / 2.f};
 
-        float draw_x = cx + m_anims[i].attack_dx;
-        drawEntityCard(ent, i, {draw_x, cy}, snap.current_turn_idx == i);
+        float draw_x = cx + m_anims[ent_idx].attack_dx;
+        drawEntityCard(ent, ent_idx, {draw_x, cy},
+                       snap.current_turn_idx == ent_idx);
+    }
+
+    for (int idx = 0; idx < e_count; ++idx) {
+        int row = idx / e_cols;
+        int col = idx % e_cols;
+        float cx = kRightX + col * (kCardW + kCardGap);
+        float cy = kStartY + row * (kCardH + kCardGap);
+        int ent_idx = enemy_ids[idx];
+        const auto& ent = snap.entities[ent_idx];
+
+        // Store card centre for animation position interpolation
+        m_entity_pos[ent_idx] = {cx + kCardW / 2.f, cy + kCardH / 2.f};
+
+        float draw_x = cx + m_anims[ent_idx].attack_dx;
+        drawEntityCard(ent, ent_idx, {draw_x, cy},
+                       snap.current_turn_idx == ent_idx);
     }
 }
 
@@ -428,8 +464,8 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
                                sf::Vector2f pos,
                                bool highlight)
 {
-    const float W = 190.f;
-    const float H = 130.f;
+    const float W = kCardW;
+    const float H = kCardH;
     auto& anim = m_anims[entity_index];
 
     // Card bg
@@ -507,7 +543,7 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
     // Name
     sf::Color name_col = ent.is_player ? C::PLAYER_NAME : C::ENEMY_NAME;
     if (!ent.is_alive) name_col = C::DEAD_COL;
-    drawText(ent.name, pos.x + 4.f, pos.y + 78.f, kFontSm, name_col);
+    drawText(ent.name, pos.x + 4.f, pos.y + 70.f, kFontSm, name_col);
 
     if (!ent.is_alive) {
         drawText("DEAD", pos.x + W / 2.f - 16.f, pos.y + H / 2.f - 8.f,
@@ -516,32 +552,32 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
     }
 
     // HP bar
-    drawHpBar(pos.x + 4.f, pos.y + 92.f, W - 8.f, 8.f, ent.hp, ent.max_hp);
+    drawHpBar(pos.x + 4.f, pos.y + 84.f, W - 8.f, 8.f, ent.hp, ent.max_hp);
     char hpbuf[32];
     std::snprintf(hpbuf, sizeof(hpbuf), "%d/%d", ent.hp, ent.max_hp);
-    drawText(hpbuf, pos.x + 4.f, pos.y + 101.f, kFontSm - 1,
+    drawText(hpbuf, pos.x + 4.f, pos.y + 93.f, kFontSm - 1,
              sf::Color(200, 200, 200, 200));
 
     // Stamina bar
-    drawStaminaBar(pos.x + 4.f, pos.y + 115.f, W - 8.f, 6.f,
+    drawStaminaBar(pos.x + 4.f, pos.y + 104.f, W - 8.f, 6.f,
                    ent.stamina, ent.max_stamina);
     int sp = ent.max_stamina > 0.f
              ? (int)(ent.stamina / ent.max_stamina * 100.f) : 0;
     char sbuf[16];
     std::snprintf(sbuf, sizeof(sbuf), "SP %d%%", sp);
-    drawText(sbuf, pos.x + W - 42.f, pos.y + 114.f, kFontSm - 2, C::STAM_COL);
+    drawText(sbuf, pos.x + W - 42.f, pos.y + 103.f, kFontSm - 2, C::STAM_COL);
 
     // Status icons (turn arrow + stunned label)
     float icon_x = pos.x + 4.f;
     if (highlight) {
         m_sprites.drawStatusIcon(m_window, "turn",
-                                  {icon_x, pos.y + 78.f}, {14.f, 14.f});
+                                  {icon_x, pos.y + 70.f}, {14.f, 14.f});
         icon_x += 18.f;
     }
     if (ent.is_stunned) {
         m_sprites.drawStatusIcon(m_window, "stunned",
-                                  {icon_x, pos.y + 78.f}, {14.f, 14.f});
-        drawText("STUN", icon_x + 16.f, pos.y + 78.f,
+                                  {icon_x, pos.y + 70.f}, {14.f, 14.f});
+        drawText("STUN", icon_x + 16.f, pos.y + 70.f,
                  kFontSm - 2, C::STUN_COL);
     }
 
@@ -552,14 +588,69 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
         if (!slot.occupied || slot.name[0] == '\0' || slot.slot_size <= 0)
             continue;
         m_sprites.drawWeaponIcon(m_window, slot.name,
-                                  {pos.x + 4.f + drawn * 22.f, pos.y + 58.f},
+                                  {pos.x + 4.f + drawn * 22.f, pos.y + 50.f},
                                   {18.f, 18.f});
         ++drawn;
     }
 }
 
 // ---------------------------------------------------------------------------
-// drawFloatingWeapons
+// showDropOffer  – called from renderThreadSFML when a drop arrives
+// ---------------------------------------------------------------------------
+void Renderer::showDropOffer(int player_idx, const char* weapon_name) {
+    m_drop_for_player = player_idx;
+    std::strncpy(m_drop_weapon_name, weapon_name,
+                 sizeof(m_drop_weapon_name) - 1);
+    m_drop_weapon_name[sizeof(m_drop_weapon_name) - 1] = '\0';
+    m_phase = InputPhase::DROP_OFFER;
+}
+
+// ---------------------------------------------------------------------------
+// drawDropOfferDialog
+// ---------------------------------------------------------------------------
+void Renderer::drawDropOfferDialog() {
+    // Dark overlay
+    m_rect.setSize({m_win_w, m_win_h});
+    m_rect.setPosition(0.f, 0.f);
+    m_rect.setFillColor(sf::Color(0, 0, 0, 160));
+    m_rect.setOutlineThickness(0.f);
+    m_window.draw(m_rect);
+
+    const float DW = 340.f, DH = 160.f;
+    const float DX = (m_win_w - DW) / 2.f;
+    const float DY = (m_win_h - DH) / 2.f;
+
+    drawPanelBackground(DX, DY, DW, DH, C::MENU_BG);
+
+    // Weapon icon centred at top of dialog
+    m_sprites.drawWeaponIcon(m_window, m_drop_weapon_name,
+                              {DX + DW / 2.f - 20.f, DY + 10.f},
+                              {40.f, 40.f});
+
+    // Title
+    char title[64];
+    std::snprintf(title, sizeof(title), "%s dropped!", m_drop_weapon_name);
+    drawText(title, DX + 10.f, DY + 54.f, kFontMd, C::BORDER_GOLD);
+
+    char sub[64];
+    std::snprintf(sub, sizeof(sub), "Player %d: Pick it up?",
+                  m_drop_for_player + 1);
+    drawText(sub, DX + 10.f, DY + 76.f, kFontSm, C::WHITE);
+
+    // YES button
+    GuiButton yes_btn = makeButton(DX + 20.f, DY + 108.f, 130.f, 36.f,
+                                   "YES  Pick up");
+    yes_btn.hovered = sf::FloatRect{DX+20.f, DY+108.f, 130.f, 36.f}
+                      .contains(sf::Vector2f(sf::Mouse::getPosition(m_window)));
+    drawButton(m_window, m_rect, m_text, m_font, yes_btn);
+
+    // NO button
+    GuiButton no_btn  = makeButton(DX + 180.f, DY + 108.f, 130.f, 36.f,
+                                   "NO  Leave it");
+    no_btn.hovered  = sf::FloatRect{DX+180.f, DY+108.f, 130.f, 36.f}
+                      .contains(sf::Vector2f(sf::Mouse::getPosition(m_window)));
+    drawButton(m_window, m_rect, m_text, m_font, no_btn);
+}
 // Drawn after all cards so it appears on top.
 // Interpolates the icon position between attacker card centre and the midpoint
 // between attacker and target.
@@ -663,7 +754,7 @@ void Renderer::drawStatusBar(const RenderSnapshot& snap) {
 // Button helpers
 // ---------------------------------------------------------------------------
 static GuiButton makeButton(float x, float y, float w, float h,
-                             const std::string& label, bool enabled = true)
+                             const std::string& label, bool enabled)
 {
     GuiButton b;
     b.bounds  = {x, y, w, h};
@@ -698,9 +789,9 @@ static void drawButton(sf::RenderWindow& win, sf::RectangleShape& rect,
 
 void Renderer::buildActionButtons(const RenderSnapshot::EntitySnap& actor) {
     m_action_buttons.clear();
-    const float BW = 180.f, BH = 38.f, GAP = 8.f;
+    const float BW = 180.f, BH = 32.f, GAP = 5.f;
     const float MX = (m_win_w - BW * 2.f - GAP) / 2.f;
-    const float MY = 550.f;
+    const float MY = 480.f;
 
     struct { const char* label; bool enabled; } acts[] = {
         {"Strike",    true},
@@ -907,10 +998,18 @@ void Renderer::handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap) {
 
     // ---- ACTION MENU -------------------------------------------------------
     if (m_phase == InputPhase::ACTION_MENU) {
+        // Order must match buildActionButtons() exactly:
+        // Strike, Exhaust, Heal, Skip, Use Weapon, Swap In, Ultimate, Stun, Quit
         ActionType action_types[] = {
-            ActionType::STRIKE, ActionType::EXHAUST, ActionType::HEAL,
-            ActionType::SKIP,   ActionType::USE_WEAPON, ActionType::SWAP_IN,
-            ActionType::ULTIMATE, ActionType::STUN, ActionType::QUIT
+            ActionType::STRIKE,     // button 0
+            ActionType::EXHAUST,    // button 1
+            ActionType::HEAL,       // button 2
+            ActionType::SKIP,       // button 3
+            ActionType::USE_WEAPON, // button 4
+            ActionType::SWAP_IN,    // button 5
+            ActionType::ULTIMATE,   // button 6
+            ActionType::STUN,       // button 7
+            ActionType::QUIT        // button 8
         };
         for (int i = 0; i < (int)m_action_buttons.size(); ++i) {
             const auto& btn = m_action_buttons[i];
@@ -956,9 +1055,12 @@ void Renderer::handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap) {
             sf::FloatRect dr{MX, by, BW, 34.f};
             if (dr.contains(mp)) {
                 int entity_idx = (int)btn.bounds.left;
-                m_pending_gui_action = {true, m_pending_action,
-                                        entity_idx,
-                                        m_pending_gui_action.weapon_slot};
+                // Preserve weapon_slot that was set in INVENTORY_SELECT phase
+                int saved_slot = m_pending_gui_action.weapon_slot;
+                m_pending_gui_action.ready       = true;
+                m_pending_gui_action.action      = m_pending_action;
+                m_pending_gui_action.target_idx  = entity_idx;
+                m_pending_gui_action.weapon_slot = saved_slot;
                 m_phase = InputPhase::NONE;
                 return;
             }
@@ -1006,25 +1108,33 @@ void Renderer::handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap) {
         return;
     }
 
-    // ---- LONGTERM SELECT ---------------------------------------------------
-    if (m_phase == InputPhase::LONGTERM_SELECT) {
-        const float BW = 230.f, MX = m_win_w/2.f - BW/2.f;
-        float by = 100.f;
-        for (auto& btn : m_longterm_buttons) {
-            sf::FloatRect dr{MX, by, BW, 34.f};
-            if (btn.enabled && dr.contains(mp)) {
-                m_pending_gui_action = {true, ActionType::SWAP_IN, -1,
-                                        (int)btn.bounds.left};
-                m_phase = InputPhase::NONE;
-                return;
-            }
-            by += 40.f;
+    // ---- DROP OFFER --------------------------------------------------------
+    if (m_phase == InputPhase::DROP_OFFER) {
+        const float DW = 340.f, DH = 160.f;
+        const float DX = (m_win_w - DW) / 2.f;
+        const float DY = (m_win_h - DH) / 2.f;
+
+        sf::FloatRect yes_r{DX + 20.f,  DY + 108.f, 130.f, 36.f};
+        sf::FloatRect no_r {DX + 180.f, DY + 108.f, 130.f, 36.f};
+
+        if (yes_r.contains(mp)) {
+            // Player accepts the drop → USE_WEAPON with sentinel -2
+            m_pending_gui_action.ready       = true;
+            m_pending_gui_action.action      = ActionType::USE_WEAPON;
+            m_pending_gui_action.target_idx  = -1;
+            m_pending_gui_action.weapon_slot = -2;
+            m_phase = InputPhase::NONE;
+            return;
         }
-        sf::FloatRect back{MX, by + 6.f, BW, 32.f};
-        if (back.contains(mp)) {
-            m_phase = InputPhase::ACTION_MENU;
-            buildActionButtons(snap.entities[m_active_player]);
+        if (no_r.contains(mp)) {
+            // Player declines → SKIP so arbiter gives weapon to NPC
+            m_pending_gui_action.ready       = true;
+            m_pending_gui_action.action      = ActionType::SKIP;
+            m_pending_gui_action.target_idx  = -1;
+            m_pending_gui_action.weapon_slot = -1;
+            m_phase = InputPhase::NONE;
+            return;
         }
-        return;
+        return; // swallow all other clicks while dialog is open
     }
 }

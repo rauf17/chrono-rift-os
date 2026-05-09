@@ -533,79 +533,132 @@ void* renderThreadSFML(void* arg) {
  
     Renderer renderer("../assets", "Chrono Rift");
  
-    // Track previous turn index so we know when the turn changes
     int  prev_turn_idx    = -1;
     bool prev_turn_player = false;
  
-    // Track previous HP to detect hits
-    int prev_hp[MAX_ENTITIES] = {};
+    int  prev_hp   [MAX_ENTITIES] = {};
+    bool prev_alive[MAX_ENTITIES] = {};
+    bool prev_stunned[MAX_ENTITIES] = {};
+ 
     {
-        // Initialise from shared memory once
         sem_wait(&state->global_mutex);
         int total = state->player_count + state->npc_count;
-        for (int i = 0; i < total; ++i)
-            prev_hp[i] = state->entities[i].hp;
+        for (int i = 0; i < total; ++i) {
+            prev_hp[i]      = state->entities[i].hp;
+            prev_alive[i]   = state->entities[i].is_alive;
+            prev_stunned[i] = state->entities[i].is_stunned;
+        }
         sem_post(&state->global_mutex);
     }
  
     while (state->game_running && renderer.isOpen()) {
  
-        // ---- 1. Poll SFML events (includes mouse clicks) -------------------
+        // 1. Events
         if (!renderer.pollEvents()) {
             state->game_running = false;
             break;
         }
  
-        // ---- 2. Capture snapshot ------------------------------------------
+        // 2. Snapshot
         RenderSnapshot snap = captureSnapshot(state);
- 
-        // ---- 3. Detect HP changes → trigger hit flash + attack anim --------
         int total = snap.player_count + snap.npc_count;
+ 
+        // 3. HP drop → hit flash; death → death anim
         for (int i = 0; i < total; ++i) {
-            if (snap.entities[i].hp < prev_hp[i] && snap.entities[i].is_alive) {
+            if (snap.entities[i].hp < prev_hp[i] && snap.entities[i].is_alive)
                 renderer.triggerHitFlash(i);
-            }
-            if (!snap.entities[i].is_alive && prev_hp[i] > 0) {
+            if (!snap.entities[i].is_alive && prev_alive[i])
                 renderer.triggerDeath(i);
-            }
-            prev_hp[i] = snap.entities[i].hp;
+            prev_hp[i]    = snap.entities[i].hp;
+            prev_alive[i] = snap.entities[i].is_alive;
         }
  
-        // ---- 4. Detect turn change → update GUI input phase ----------------
-        int  cur_turn   = snap.current_turn_idx;
-        bool is_player_turn = (cur_turn >= 0 &&
-                               cur_turn < snap.player_count + snap.npc_count &&
+        // 4. Newly stunned → stun flash burst
+        for (int i = 0; i < total; ++i) {
+            if (snap.entities[i].is_stunned && !prev_stunned[i])
+                renderer.triggerStunFlash(i);
+            prev_stunned[i] = snap.entities[i].is_stunned;
+        }
+ 
+        // 5. Turn change → update action menu
+        int  cur_turn       = snap.current_turn_idx;
+        bool is_player_turn = (cur_turn >= 0 && cur_turn < total &&
                                snap.entities[cur_turn].is_player &&
                                snap.entities[cur_turn].is_my_turn);
  
         if (cur_turn != prev_turn_idx || is_player_turn != prev_turn_player) {
             prev_turn_idx    = cur_turn;
             prev_turn_player = is_player_turn;
+            renderer.setPlayerTurn(is_player_turn ? cur_turn : -1, snap);
+        }
  
-            if (is_player_turn) {
-                renderer.setPlayerTurn(cur_turn, snap);
-                // Trigger attack anim when a non-player just acted
-                // (we detect this simply by the turn switching to a player)
-            } else {
-                renderer.setPlayerTurn(-1, snap);
+        // 6. Weapon drop offer → show Y/N dialog in GUI
+        {
+            sem_wait(&state->global_mutex);
+            bool  drop_pending = state->pending_drop_offer;
+            int   drop_player  = state->pending_drop_for_player;
+            char  drop_name[32] = {};
+            if (drop_pending) {
+                std::strncpy(drop_name, state->pending_drop_name,
+                             sizeof(drop_name) - 1);
+                drop_name[sizeof(drop_name) - 1] = '\0';
+            }
+            sem_post(&state->global_mutex);
+
+            bool drop_ready = false;
+            if (drop_pending && drop_player >= 0 && drop_player < total) {
+                drop_ready = (drop_player == cur_turn &&
+                              snap.entities[drop_player].is_player &&
+                              snap.entities[drop_player].is_my_turn);
+            }
+
+            if (drop_ready) {
+                // Clear the shared flag — the renderer now owns this decision
+                sem_wait(&state->global_mutex);
+                state->pending_drop_offer   = false;
+                state->pending_drop_name[0] = '\0';
+                state->pending_drop_for_player = -1;
+                sem_post(&state->global_mutex);
+
+                // Tell renderer to show the dialog for the right player
+                renderer.showDropOffer(drop_player, drop_name);
+
+                std::printf("[DROP] %s dropped for Player %d — showing dialog\n",
+                            drop_name, drop_player + 1);
             }
         }
  
-        // ---- 5. Poll for completed GUI action ------------------------------
+        // 7. Poll for completed GUI action (button click or drop dialog choice)
         GuiAction ga;
         if (renderer.pollGuiAction(ga)) {
-            // Trigger attack animation before writing to shared memory
-            // so the visual happens immediately on click
-            if (ga.action == ActionType::STRIKE  ||
-                ga.action == ActionType::EXHAUST  ||
-                ga.action == ActionType::USE_WEAPON ||
+ 
+            // Animations for attack-type actions
+            if (ga.action == ActionType::STRIKE   ||
+                ga.action == ActionType::EXHAUST   ||
                 ga.action == ActionType::STUN)
             {
-                if (ga.target_idx >= 0)
+                if (ga.target_idx >= 0) {
                     renderer.triggerAttackAnim(cur_turn, ga.target_idx);
+                    if (ga.action == ActionType::STUN)
+                        renderer.triggerStunFlash(ga.target_idx);
+                }
             }
  
-            // Write action into shared memory (same protocol as HIP)
+            // Weapon float for USE_WEAPON with real slot (not pickup sentinel)
+            if (ga.action == ActionType::USE_WEAPON &&
+                ga.weapon_slot >= 0 && ga.target_idx >= 0)
+            {
+                const char* wname = "";
+                if (cur_turn >= 0 && cur_turn < total &&
+                    ga.weapon_slot < INVENTORY_SLOTS)
+                    wname = snap.entities[cur_turn]
+                                .inventory[ga.weapon_slot].name;
+                renderer.triggerAttackAnim(cur_turn, ga.target_idx);
+                renderer.triggerWeaponFloat(cur_turn, ga.target_idx, wname);
+                renderer.triggerHitFlash(ga.target_idx);
+            }
+ 
+            // Write action into shared memory
             sem_wait(&state->action_mutex);
             state->action_buffer.action      = ga.action;
             state->action_buffer.actor_idx   = cur_turn;
@@ -614,12 +667,12 @@ void* renderThreadSFML(void* arg) {
             sem_post(&state->action_mutex);
  
             sem_wait(&state->global_mutex);
-            state->entities[cur_turn].action_ready = true;
+            if (cur_turn >= 0 && cur_turn < total)
+                state->entities[cur_turn].action_ready = true;
             sem_post(&state->global_mutex);
  
-            // Print to terminal (action log in GUI mode goes to stdout)
-            std::printf("[GUI] %s chose action %d target=%d slot=%d\n",
-                snap.entities[cur_turn].name,
+            std::printf("[GUI ACTION] %s: action=%d target=%d slot=%d\n",
+                cur_turn >= 0 ? snap.entities[cur_turn].name : "?",
                 (int)ga.action, ga.target_idx, ga.weapon_slot);
  
             if (ga.action == ActionType::QUIT) {
@@ -628,11 +681,8 @@ void* renderThreadSFML(void* arg) {
             }
         }
  
-        // ---- 6. Render frame -----------------------------------------------
+        // 8. Render
         renderer.render(snap);
- 
-        // Small sleep to avoid busy-looping when nothing changed
-        // (vsync/framelimit in SFML already caps this at 60fps)
     }
  
     renderer.close();
@@ -1089,7 +1139,6 @@ int main() {
     pid_t asp_pid = -1;
  
     if (display_mode == 2) {
-        // GUI mode: only launch ASP. The render thread handles player input.
         asp_pid = fork();
         if (asp_pid < 0) { perror("fork asp failed"); exit(1); }
         if (asp_pid == 0) {
@@ -1098,10 +1147,9 @@ int main() {
             exit(1);
         }
         sleep(1);
-        std::printf("Arbiter: ASP launched with PID %d (GUI mode, HIP not needed)\n",
+        std::printf("Arbiter: ASP launched PID=%d (GUI mode, HIP skipped)\n",
                     asp_pid);
     } else {
-        // TUI mode: launch both HIP and ASP as before
         launchProcesses(hip_pid, asp_pid);
     }
     g_hip_pid = hip_pid;
