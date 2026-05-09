@@ -207,7 +207,7 @@ private:
     char  m_drop_weapon_name[32] = {};
     int   m_drop_for_player      = -1;
 
-    static constexpr unsigned int kFontLg = 20u;
-    static constexpr unsigned int kFontMd = 15u;
-    static constexpr unsigned int kFontSm = 12u;
+    static constexpr unsigned int kFontLg = 26u;
+    static constexpr unsigned int kFontMd = 19u;
+    static constexpr unsigned int kFontSm = 15u;
 };

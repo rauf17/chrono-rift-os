@@ -124,7 +124,7 @@ Renderer::Renderer(const std::string& assets_path,
                                  (m_win_h - tsz.y * sc) / 2.f);
     }
 
-    if (!m_font.loadFromFile(assets_path + "/fonts/BlazeCircuitRegular.ttf"))
+    if (!m_font.loadFromFile(assets_path + "/fonts/VA.ttf"))
         std::fprintf(stderr, "Renderer: font not found\n");
     m_text.setFont(m_font);
 
@@ -375,7 +375,10 @@ void Renderer::drawText(const std::string& str, float x, float y,
     m_text.setCharacterSize(size);
     m_text.setFillColor(col);
     m_text.setPosition(x, y);
+    m_text.setOutlineColor(sf::Color::Black);
+    m_text.setOutlineThickness(2.f);
     m_window.draw(m_text);
+    m_text.setStyle(sf::Text::Bold);
 }
 
 void Renderer::drawPanelBackground(float x, float y, float w, float h,
@@ -476,7 +479,7 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
 
     sf::Color name_col = ent.is_player ? C::PLAYER_NAME : C::ENEMY_NAME;
     if (!ent.is_alive) name_col = C::DEAD_COL;
-    drawText(ent.name, pos.x + 4.f, pos.y + 4.f, kFontSm, name_col);
+    drawText(ent.name, pos.x + 4.f, pos.y + 20.f, kFontSm, name_col);
 
     m_sprites.drawEntity(m_window, entity_index, ent.is_player,
                           {sprite_x, sprite_y},
