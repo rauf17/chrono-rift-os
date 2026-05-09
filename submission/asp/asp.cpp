@@ -87,6 +87,7 @@ void* npcThread(void* arg) {
             continue;
         }
         if (!my_turn) {
+            usleep(100000);
             continue;
         }
 
@@ -96,22 +97,20 @@ void* npcThread(void* arg) {
         // Protect decision-making reads from concurrent updates by Arbiter/HIP.
         sem_wait(&state->global_mutex);
         int player_count = state->player_count;
-        int lowest_hp = INT_MAX;
+        int alive_player_indices[MAX_PLAYERS];
         int alive_player_count = 0;
 
         for (int i = 0; i < player_count; ++i) {
             if (state->entities[i].is_alive) {
-                alive_player_count++;
-                if (state->entities[i].hp < lowest_hp) {
-                    lowest_hp = state->entities[i].hp;
-                    chosen_target = i;
-                }
+                alive_player_indices[alive_player_count++] = i;
             }
         }
 
         if (alive_player_count > 0) {
             if (rand_r(&thread_seed) % 10 < 8) {
                 chosen_action = ActionType::STRIKE;
+                // Pick a random alive player as target
+                chosen_target = alive_player_indices[rand_r(&thread_seed) % alive_player_count];
             } else {
                 chosen_action = ActionType::SKIP;
                 chosen_target = -1;
@@ -132,6 +131,8 @@ void* npcThread(void* arg) {
         sem_wait(&state->global_mutex);
         state->entities[npc_idx].action_ready = true;
         sem_post(&state->global_mutex);
+
+        usleep(500000);
     }
 
     return nullptr;

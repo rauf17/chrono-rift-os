@@ -304,10 +304,16 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
 // The loop unlocks the shared state before waiting for action_ready,
 // allowing HIP or ASP to write the chosen action.
 void schedulingLoop(GlobalState* state) {
+    // Side-alternation: after all players on one side have acted once,
+    // give the other side a turn. We track this with a simple flag:
+    // after ANY player acts we want an NPC next, and after ANY NPC acts
+    // we want a player next. Within each side we pick by highest stamina
+    // so fast entities go first. If the preferred side has no one ready
+    // we fall back to any ready entity to avoid deadlock.
+    bool want_npc_next = false; // start by giving players the first go
+
     while (state->game_running && !shutdown_requested.load()) {
         struct timespec ts = {1, 0};
-        // nanosleep is preferred over sleep(1) because sleep() can be interrupted by signals.
-        // Using nanosleep avoids interaction issues with SIGALRM later.
         nanosleep(&ts, nullptr);
 
         sem_wait(&state->global_mutex);
@@ -315,20 +321,42 @@ void schedulingLoop(GlobalState* state) {
         int total_entities = state->player_count + state->npc_count;
         int actor_idx = -1;
 
+        // Accumulate stamina for all alive, non-stunned entities.
         for (int i = 0; i < total_entities; ++i) {
             Entity& entity = state->entities[i];
-            if (!entity.is_alive || entity.is_stunned) {
-                continue;
-            }
-
+            if (!entity.is_alive || entity.is_stunned) continue;
             entity.stamina += entity.speed;
-            if (entity.stamina > entity.max_stamina) {
+            if (entity.stamina > entity.max_stamina)
                 entity.stamina = entity.max_stamina;
-            }
+        }
 
-            if (actor_idx == -1 && entity.stamina >= entity.max_stamina) {
-                actor_idx = i;
+        // Collect all ready entities on the preferred side, then pick one
+        // randomly so no single entity hogs turns within its side.
+        bool want_player = !want_npc_next;
+        int candidates[MAX_ENTITIES];
+        int cand_count = 0;
+
+        for (int i = 0; i < total_entities; ++i) {
+            Entity& entity = state->entities[i];
+            if (!entity.is_alive || entity.is_stunned) continue;
+            if (entity.stamina < entity.max_stamina) continue;
+            if (entity.is_player != want_player) continue;
+            candidates[cand_count++] = i;
+        }
+
+        if (cand_count > 0) {
+            // Random pick among all ready entities on the preferred side.
+            actor_idx = candidates[rand() % cand_count];
+        } else {
+            // Fallback: preferred side not ready — pick randomly from any side.
+            for (int i = 0; i < total_entities; ++i) {
+                Entity& entity = state->entities[i];
+                if (!entity.is_alive || entity.is_stunned) continue;
+                if (entity.stamina < entity.max_stamina) continue;
+                candidates[cand_count++] = i;
             }
+            if (cand_count > 0)
+                actor_idx = candidates[rand() % cand_count];
         }
 
         if (actor_idx == -1) {
@@ -347,16 +375,18 @@ void schedulingLoop(GlobalState* state) {
         state->action_buffer.weapon_slot = -1;
 
         sem_post(&state->global_mutex);
+        struct timespec asp_yield = {0, 200 * 1000 * 1000};
+        nanosleep(&asp_yield, nullptr);
 
         // Wait for the selected entity to set action_ready.
         // We poll because the shared action_ready flag is a simple cross-process signal,
         // and no blocking primitive exists for this shared-flag protocol yet.
         if (actor.is_player) {
             while (state->game_running) {
-                sem_wait(&state->global_mutex);
-                bool ready = state->entities[actor_idx].action_ready;
-                sem_post(&state->global_mutex);
-                if (ready) {
+                // Poll without mutex to avoid starving renderThreadSFML and
+                // the NPC threads.  The GUI thread writes action_ready under
+                // the mutex so visibility is guaranteed on all platforms.
+                if (state->entities[actor_idx].action_ready) {
                     break;
                 }
                 struct timespec wait_ts = {0, 100 * 1000 * 1000};
@@ -364,27 +394,52 @@ void schedulingLoop(GlobalState* state) {
             }
         } else {
             int elapsed_checks = 0;
-            const int max_checks = 30; // 3 seconds at 100ms per poll
+            const int max_checks = 100; // 10 seconds max
             bool ready = false;
             while (state->game_running && elapsed_checks < max_checks) {
+                struct timespec wait_ts = {0, 100 * 1000 * 1000};
+                nanosleep(&wait_ts, nullptr);
+                // Must use the mutex here: action_ready is written by the ASP
+                // child *process* (not just a thread), so a CPU memory barrier
+                // is required for the write to be visible.  sem_wait/post
+                // provide that barrier on Linux for MAP_SHARED memory.
                 sem_wait(&state->global_mutex);
                 ready = state->entities[actor_idx].action_ready;
                 sem_post(&state->global_mutex);
                 if (ready) {
                     break;
                 }
-                struct timespec wait_ts = {0, 100 * 1000 * 1000};
-                nanosleep(&wait_ts, nullptr);
                 elapsed_checks++;
             }
             if (!ready && state->game_running) {
+                std::fprintf(stderr, "[SCHED] NPC %d timed out — forcing SKIP\n", actor_idx);
                 sem_wait(&state->global_mutex);
                 state->action_buffer.action = ActionType::SKIP;
                 state->action_buffer.actor_idx = actor_idx;
                 state->entities[actor_idx].action_ready = true;
                 sem_post(&state->global_mutex);
+            } else {
+                // Log what action the NPC actually submitted so we can verify
+                sem_wait(&state->global_mutex);
+                std::fprintf(stderr, "[SCHED] NPC %d ready: action=%d target=%d\n",
+                             actor_idx,
+                             (int)state->action_buffer.action,
+                             state->action_buffer.target_idx);
+                sem_post(&state->global_mutex);
             }
         }
+
+        // Debug: log what we're about to commit
+        {
+            sem_wait(&state->global_mutex);
+            std::fprintf(stderr, "[SCHED] committing: actor=%d action=%d target=%d\n",
+                         state->action_buffer.actor_idx,
+                         (int)state->action_buffer.action,
+                         state->action_buffer.target_idx);
+            sem_post(&state->global_mutex);
+        }
+        // Flip the side preference: if a player just acted, we want an NPC next.
+        want_npc_next = state->entities[actor_idx].is_player;
 
         commitAction(state);
     }
@@ -535,6 +590,7 @@ void* renderThreadSFML(void* arg) {
  
     int  prev_turn_idx    = -1;
     bool prev_turn_player = false;
+    RenderSnapshot cached_snap{};   // last successfully captured snapshot
  
     int  prev_hp   [MAX_ENTITIES] = {};
     bool prev_alive[MAX_ENTITIES] = {};
@@ -552,15 +608,65 @@ void* renderThreadSFML(void* arg) {
     }
  
     while (state->game_running && renderer.isOpen()) {
- 
+        usleep(16000); // ~60fps cap; reduces global_mutex starvation
+
         // 1. Events
         if (!renderer.pollEvents()) {
             state->game_running = false;
             break;
         }
  
-        // 2. Snapshot
-        RenderSnapshot snap = captureSnapshot(state);
+        // 2. Snapshot — try to get the mutex without blocking.  If the
+        // scheduling loop currently holds it (e.g. checking action_ready),
+        // we simply reuse the previous frame's snapshot.  A stale frame
+        // for one render tick is invisible to the player but blocking
+        // global_mutex here starves the NPC action_ready poll.
+        RenderSnapshot snap;
+        if (sem_trywait(&state->global_mutex) == 0) {
+            // Fill snapshot while we own the mutex, then release immediately.
+            snap.player_count     = state->player_count;
+            snap.npc_count        = state->npc_count;
+            snap.game_running     = state->game_running;
+            snap.ultimate_active  = state->ultimate_active;
+            snap.current_turn_idx = state->current_turn_idx;
+            snap.log_head         = state->log_head;
+            for (int i = 0; i < ACTION_LOG_LINES; ++i)
+                std::memcpy(snap.log[i], state->log[i], ACTION_LOG_WIDTH);
+            int snap_total = state->player_count + state->npc_count;
+            for (int i = 0; i < snap_total && i < MAX_ENTITIES; ++i) {
+                const Entity& src = state->entities[i];
+                auto& dst = snap.entities[i];
+                std::strncpy(dst.name, src.name, 32);
+                dst.is_player         = src.is_player;
+                dst.is_alive          = src.is_alive;
+                dst.is_my_turn        = src.is_my_turn;
+                dst.is_stunned        = src.is_stunned;
+                dst.hp                = src.hp;
+                dst.max_hp            = src.max_hp;
+                dst.stamina           = src.stamina;
+                dst.max_stamina       = src.max_stamina;
+                dst.long_term_count   = src.long_term_count;
+                dst.holds_solar_core  = src.holds_solar_core;
+                dst.holds_lunar_blade = src.holds_lunar_blade;
+                for (int s = 0; s < INVENTORY_SLOTS; ++s) {
+                    std::strncpy(dst.inventory[s].name, src.inventory[s].name, 32);
+                    dst.inventory[s].occupied    = src.inventory[s].occupied;
+                    dst.inventory[s].slot_size   = src.inventory[s].slot_size;
+                    dst.inventory[s].is_artifact = src.inventory[s].is_artifact;
+                }
+                for (int s = 0; s < LONG_TERM_SIZE; ++s) {
+                    std::strncpy(dst.long_term[s].name, src.long_term[s].name, 32);
+                    dst.long_term[s].occupied    = src.long_term[s].occupied;
+                    dst.long_term[s].slot_size   = src.long_term[s].slot_size;
+                    dst.long_term[s].is_artifact = src.long_term[s].is_artifact;
+                }
+            }
+            sem_post(&state->global_mutex);
+            cached_snap = snap;
+        } else {
+            // Mutex busy — reuse cached snapshot from previous frame.
+            snap = cached_snap;
+        }
         int total = snap.player_count + snap.npc_count;
  
         // 3. HP drop → hit flash; death → death anim
@@ -631,58 +737,81 @@ void* renderThreadSFML(void* arg) {
         // 7. Poll for completed GUI action (button click or drop dialog choice)
         GuiAction ga;
         if (renderer.pollGuiAction(ga)) {
- 
-            // Animations for attack-type actions
-            if (ga.action == ActionType::STRIKE   ||
-                ga.action == ActionType::EXHAUST   ||
-                ga.action == ActionType::STUN)
-            {
-                if (ga.target_idx >= 0) {
-                    renderer.triggerAttackAnim(cur_turn, ga.target_idx);
-                    if (ga.action == ActionType::STUN)
-                        renderer.triggerStunFlash(ga.target_idx);
-                }
-            }
- 
-            // Weapon float for USE_WEAPON with real slot (not pickup sentinel)
-            if (ga.action == ActionType::USE_WEAPON &&
-                ga.weapon_slot >= 0 && ga.target_idx >= 0)
-            {
-                const char* wname = "";
-                if (cur_turn >= 0 && cur_turn < total &&
-                    ga.weapon_slot < INVENTORY_SLOTS)
-                    wname = snap.entities[cur_turn]
-                                .inventory[ga.weapon_slot].name;
-                renderer.triggerAttackAnim(cur_turn, ga.target_idx);
-                renderer.triggerWeaponFloat(cur_turn, ga.target_idx, wname);
-                renderer.triggerHitFlash(ga.target_idx);
-            }
- 
-            // Write action into shared memory
-            sem_wait(&state->action_mutex);
-            state->action_buffer.action      = ga.action;
-            state->action_buffer.actor_idx   = cur_turn;
-            state->action_buffer.target_idx  = ga.target_idx;
-            state->action_buffer.weapon_slot = ga.weapon_slot;
-            sem_post(&state->action_mutex);
- 
+
+            // Read the live actor index directly from shared memory under the
+            // action_mutex to avoid using a stale cur_turn from the snapshot.
+            // This prevents overwriting an NPC's pending action_buffer entry.
+            int live_actor_idx = -1;
             sem_wait(&state->global_mutex);
-            if (cur_turn >= 0 && cur_turn < total)
-                state->entities[cur_turn].action_ready = true;
+            live_actor_idx = state->current_turn_idx;
+            bool live_is_player = (live_actor_idx >= 0 &&
+                                   live_actor_idx < total &&
+                                   state->entities[live_actor_idx].is_player &&
+                                   state->entities[live_actor_idx].is_my_turn);
             sem_post(&state->global_mutex);
- 
-            std::printf("[GUI ACTION] %s: action=%d target=%d slot=%d\n",
-                cur_turn >= 0 ? snap.entities[cur_turn].name : "?",
-                (int)ga.action, ga.target_idx, ga.weapon_slot);
- 
-            if (ga.action == ActionType::QUIT) {
-                state->game_running = false;
-                break;
+
+            // CRITICAL GUARD: only commit a GUI action when it is genuinely
+            // a player's turn right now.  Stale button clicks that arrive
+            // after the turn has already flipped to an NPC must be discarded.
+            if (!live_is_player) {
+                // Discard the stale GUI action silently.
+            } else {
+                // Animations for attack-type actions
+                if (ga.action == ActionType::STRIKE   ||
+                    ga.action == ActionType::EXHAUST   ||
+                    ga.action == ActionType::STUN)
+                {
+                    if (ga.target_idx >= 0) {
+                        renderer.triggerAttackAnim(live_actor_idx, ga.target_idx);
+                        if (ga.action == ActionType::STUN)
+                            renderer.triggerStunFlash(ga.target_idx);
+                    }
+                }
+
+                // Weapon float for USE_WEAPON with real slot (not pickup sentinel)
+                if (ga.action == ActionType::USE_WEAPON &&
+                    ga.weapon_slot >= 0 && ga.target_idx >= 0)
+                {
+                    const char* wname = "";
+                    if (live_actor_idx >= 0 && live_actor_idx < total &&
+                        ga.weapon_slot < INVENTORY_SLOTS)
+                        wname = snap.entities[live_actor_idx]
+                                    .inventory[ga.weapon_slot].name;
+                    renderer.triggerAttackAnim(live_actor_idx, ga.target_idx);
+                    renderer.triggerWeaponFloat(live_actor_idx, ga.target_idx, wname);
+                    renderer.triggerHitFlash(ga.target_idx);
+                }
+
+                // Write action into shared memory using the live actor index,
+                // not the potentially-stale cur_turn from the snapshot.
+                sem_wait(&state->action_mutex);
+                state->action_buffer.action      = ga.action;
+                state->action_buffer.actor_idx   = live_actor_idx;
+                state->action_buffer.target_idx  = ga.target_idx;
+                state->action_buffer.weapon_slot = ga.weapon_slot;
+                sem_post(&state->action_mutex);
+
+                sem_wait(&state->global_mutex);
+                state->entities[live_actor_idx].action_ready = true;
+                sem_post(&state->global_mutex);
+
+                std::printf("[GUI ACTION] %s: action=%d target=%d slot=%d\n",
+                    snap.entities[live_actor_idx].name,
+                    (int)ga.action, ga.target_idx, ga.weapon_slot);
+
+                if (ga.action == ActionType::QUIT) {
+                    state->game_running = false;
+                    break;
+                }
             }
         }
  
         // 8. Render
         renderer.render(snap);
+        // During NPC turns sleep longer so the scheduling loop can acquire
+        // global_mutex quickly for the action_ready poll.
+        bool npc_turn = (cur_turn >= 0 && cur_turn < total && !snap.entities[cur_turn].is_player);
+        usleep(npc_turn ? 200000 : 16000);
     }
  
     renderer.close();
@@ -745,6 +874,26 @@ void* deadlockMonitorThread(void* arg) {
         }
     }
 
+    return nullptr;
+}
+
+void* stunExpiryThread(void* arg) {
+    GlobalState* state = (GlobalState*)arg;
+    while (state->game_running) {
+        usleep(500000); // Check every 500ms
+        sem_wait(&state->global_mutex);
+        int total_entities = state->player_count + state->npc_count;
+        for (int i = 0; i < total_entities; ++i) {
+            Entity* entity = &state->entities[i];
+            if (entity->is_stunned && time(nullptr) >= entity->stun_end_time) {
+                entity->is_stunned = false;
+                char msg[128];
+                std::snprintf(msg, sizeof(msg), "%s is no longer stunned", entity->name);
+                appendLogUnsafe(state, msg);
+            }
+        }
+        sem_post(&state->global_mutex);
+    }
     return nullptr;
 }
 
@@ -1135,6 +1284,12 @@ int main() {
         cleanupAndExit(state, -1, -1);
     }
 
+    pthread_t stun_expiry_tid;
+    if (pthread_create(&stun_expiry_tid, nullptr, stunExpiryThread, state) != 0) {
+        perror("pthread_create stun expiry failed");
+        cleanupAndExit(state, -1, -1);
+    }
+
     pid_t hip_pid = -1;
     pid_t asp_pid = -1;
  
@@ -1164,6 +1319,7 @@ int main() {
     state->game_running = false;
     pthread_join(render_tid, nullptr);
     pthread_join(deadlock_tid, nullptr);
+    pthread_join(stun_expiry_tid, nullptr);
     cleanupAndExit(state, hip_pid, asp_pid);
     return 0;
 }
