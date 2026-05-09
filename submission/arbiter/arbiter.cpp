@@ -221,7 +221,7 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
 
     state->roll_seed = roll_number;
     state->player_count = player_count;
-    int npc_count = rand() % 8 + 2;
+    int npc_count = 4;
     state->npc_count = npc_count;
 
     // Initialize players
@@ -279,6 +279,14 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
     state->pending_drop_for_player = -1;
     state->eclipse_relic_dropped = false;
 
+    // Initialize wave system
+    state->wave_number = 1;
+    state->wave_spawn_pending = false;
+    state->wave_spawn_count = 0;
+    std::memset(state->wave_spawn_indices, -1, sizeof(state->wave_spawn_indices));
+    state->game_won  = false;
+    state->game_lost = false;
+
     // Initialize artifacts
     std::strncpy(state->artifacts[0].name, "Solar Core", sizeof(state->artifacts[0].name));
     state->artifacts[0].exists = true;
@@ -297,6 +305,85 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
     state->artifacts[2].is_free = true;
     state->artifacts[2].held_by = -1;
     std::memset(state->artifacts[2].waiting, 0, sizeof(state->artifacts[2].waiting));
+}
+
+// ---------------------------------------------------------------------------
+// spawnNextWave
+// Called (under global_mutex) when all current enemies are dead and the
+// 10-kill cap has not been reached yet.  Writes up to 4 new NPCs into the
+// entity slots that were freed by dead enemies, increments wave_number, and
+// sets wave_spawn_pending so the ASP spawns new threads for them.
+// Must be called while holding global_mutex.
+// ---------------------------------------------------------------------------
+static void spawnNextWave(GlobalState* state) {
+    int player_count = state->player_count;
+    // Spawn 4 new enemies per wave until the game ends at 10 kills.
+    int spawn_count = 4;
+    if (state->enemies_killed >= 10) return;
+    if (spawn_count <= 0) return;
+
+    // Cap at MAX_NPCS slots available after players.
+    int max_npc_slots = MAX_ENTITIES - player_count;
+    if (spawn_count > max_npc_slots) spawn_count = max_npc_slots;
+
+    state->wave_number++;
+    int roll_number = state->roll_seed;
+    int last_two_digits = roll_number % 100;
+    int second_last_digit = (roll_number / 10) % 10;
+
+    int spawned = 0;
+    // Re-use entity slots player_count..player_count+npc_count-1 that are dead,
+    // or append new ones if npc_count hasn't filled up yet.
+    // Strategy: overwrite all NPC slots from scratch for the new wave.
+    state->npc_count = spawn_count;
+    state->wave_spawn_count = spawn_count;
+
+    for (int i = 0; i < spawn_count; ++i) {
+        int idx = player_count + i;
+        Entity& e = state->entities[idx];
+        // Clear inventory
+        for (int s = 0; s < INVENTORY_SLOTS; ++s) {
+            e.inventory[s].occupied  = false;
+            e.inventory[s].name[0]   = '\0';
+            e.inventory[s].slot_size = 0;
+            e.inventory[s].damage    = 0;
+            e.inventory[s].is_artifact = false;
+        }
+        for (int s = 0; s < LONG_TERM_SIZE; ++s) {
+            e.long_term[s].occupied  = false;
+            e.long_term[s].name[0]   = '\0';
+        }
+        e.long_term_count   = 0;
+        e.holds_solar_core  = false;
+        e.holds_lunar_blade = false;
+        e.holds_eclipse_relic = false;
+
+        e.is_player   = false;
+        e.is_alive    = true;
+        e.hp          = last_two_digits + (rand() % 151 + 50);
+        e.max_hp      = e.hp;
+        e.damage      = second_last_digit + 10 + state->wave_number * 2; // scale with wave
+        e.speed       = (float)(rand() % 21 + 10);
+        e.stamina     = 0.0f;
+        e.max_stamina = 150.0f;
+        e.is_my_turn  = false;
+        e.action_ready = false;
+        e.is_stunned  = false;
+        e.stun_end_time = 0;
+        std::snprintf(e.name, sizeof(e.name), "W%d Enemy %d", state->wave_number, i + 1);
+
+        state->wave_spawn_indices[spawned] = idx;
+        spawned++;
+    }
+    state->wave_spawn_count = spawned;
+    state->wave_spawn_pending = true;
+
+    char msg[128];
+    std::snprintf(msg, sizeof(msg),
+        "=== WAVE %d INCOMING! %d new enemies! ===",
+        state->wave_number, spawned);
+    appendLogUnsafe(state, msg);
+    std::fprintf(stderr, "[WAVE] %s\n", msg);
 }
 
 // Main scheduling loop for stamina-driven entity turns.
@@ -451,22 +538,35 @@ void schedulingLoop(GlobalState* state) {
 // It locks global_mutex for the entire commit phase to keep state updates atomic.
 void checkGameConditions(GlobalState* state) {
     int alive_players = 0;
+    int alive_enemies = 0;
     int total_entities = state->player_count + state->npc_count;
     for (int i = 0; i < total_entities; ++i) {
         if (state->entities[i].is_player && state->entities[i].is_alive) {
             alive_players++;
+        } else if (!state->entities[i].is_player && state->entities[i].is_alive) {
+            alive_enemies++;
         }
     }
 
+    // All players dead → game lost
     if (alive_players == 0) {
         appendLogUnsafe(state, "Game Over -- all players defeated");
+        state->game_lost    = true;
         state->game_running = false;
         return;
     }
 
+    // 10 total kills → victory
     if (state->enemies_killed >= 10) {
-        appendLogUnsafe(state, "Victory -- all enemies defeated!");
+        appendLogUnsafe(state, "VICTORY! You defeated all enemies!");
+        state->game_won     = true;
         state->game_running = false;
+        return;
+    }
+
+    // Current wave cleared but game not won → spawn next wave
+    if (alive_enemies == 0 && !state->wave_spawn_pending) {
+        spawnNextWave(state);
     }
 }
 
@@ -512,11 +612,14 @@ void* renderThread(void* arg) {
         for (int i = 0; i < ACTION_LOG_LINES; ++i) {
             std::memcpy(log_copy[i], state->log[i], ACTION_LOG_WIDTH);
         }
+        bool game_won  = state->game_won;
+        bool game_lost = state->game_lost;
+        int  wave_num  = state->wave_number;
         sem_post(&state->global_mutex);
 
         erase();
         attron(COLOR_PAIR(4));
-        mvprintw(0, 0, "=== CHRONO RIFT ===");
+        mvprintw(0, 0, "=== CHRONO RIFT ===   Wave: %d   Kills: %d/10", wave_num, state->enemies_killed);
         attroff(COLOR_PAIR(4));
 
         int row = 2;
@@ -574,6 +677,16 @@ void* renderThread(void* arg) {
             attroff(A_DIM);
         }
 
+        if (game_won) {
+            attron(COLOR_PAIR(1) | A_BOLD);
+            mvprintw(row + 2, 0, "*** CONGRATULATIONS! YOU WON! Press any key to exit. ***");
+            attroff(COLOR_PAIR(1) | A_BOLD);
+        } else if (game_lost) {
+            attron(COLOR_PAIR(2) | A_BOLD);
+            mvprintw(row + 2, 0, "*** GAME OVER! All players defeated. Press any key to exit. ***");
+            attroff(COLOR_PAIR(2) | A_BOLD);
+        }
+
         refresh();
     }
 
@@ -596,6 +709,7 @@ void* renderThreadSFML(void* arg) {
     int  prev_hp   [MAX_ENTITIES] = {};
     bool prev_alive[MAX_ENTITIES] = {};
     bool prev_stunned[MAX_ENTITIES] = {};
+    int  prev_wave  = 1;
  
     {
         sem_wait(&state->global_mutex);
@@ -607,30 +721,34 @@ void* renderThreadSFML(void* arg) {
         }
         sem_post(&state->global_mutex);
     }
+
+    // Keep rendering even after game_running goes false so we can show the
+    // victory / game-over screen.  We exit when the window is closed.
+    bool end_screen_shown = false;
  
-    while (state->game_running && renderer.isOpen()) {
+    while (renderer.isOpen()) {
+        bool game_still_running = state->game_running;
+
         usleep(16000); // ~60fps cap; reduces global_mutex starvation
 
         // 1. Events
         if (!renderer.pollEvents()) {
-            state->game_running = false;
             break;
         }
  
-        // 2. Snapshot — try to get the mutex without blocking.  If the
-        // scheduling loop currently holds it (e.g. checking action_ready),
-        // we simply reuse the previous frame's snapshot.  A stale frame
-        // for one render tick is invisible to the player but blocking
-        // global_mutex here starves the NPC action_ready poll.
+        // 2. Snapshot
         RenderSnapshot snap;
         if (sem_trywait(&state->global_mutex) == 0) {
-            // Fill snapshot while we own the mutex, then release immediately.
             snap.player_count     = state->player_count;
             snap.npc_count        = state->npc_count;
             snap.game_running     = state->game_running;
             snap.ultimate_active  = state->ultimate_active;
             snap.current_turn_idx = state->current_turn_idx;
             snap.log_head         = state->log_head;
+            snap.game_won         = state->game_won;
+            snap.game_lost        = state->game_lost;
+            snap.wave_number      = state->wave_number;
+            snap.enemies_killed   = state->enemies_killed;
             for (int i = 0; i < ACTION_LOG_LINES; ++i)
                 std::memcpy(snap.log[i], state->log[i], ACTION_LOG_WIDTH);
             int snap_total = state->player_count + state->npc_count;
@@ -665,7 +783,6 @@ void* renderThreadSFML(void* arg) {
             sem_post(&state->global_mutex);
             cached_snap = snap;
         } else {
-            // Mutex busy — reuse cached snapshot from previous frame.
             snap = cached_snap;
         }
         int total = snap.player_count + snap.npc_count;
@@ -686,132 +803,135 @@ void* renderThreadSFML(void* arg) {
                 renderer.triggerStunFlash(i);
             prev_stunned[i] = snap.entities[i].is_stunned;
         }
- 
-        // 5. Turn change → update action menu
-        int  cur_turn       = snap.current_turn_idx;
-        bool is_player_turn = (cur_turn >= 0 && cur_turn < total &&
-                               snap.entities[cur_turn].is_player &&
-                               snap.entities[cur_turn].is_my_turn);
- 
-        if (cur_turn != prev_turn_idx || is_player_turn != prev_turn_player) {
-            prev_turn_idx    = cur_turn;
-            prev_turn_player = is_player_turn;
-            renderer.setPlayerTurn(is_player_turn ? cur_turn : -1, snap);
+
+        // 4b. Wave number changed → trigger wave banner
+        if (snap.wave_number != prev_wave) {
+            renderer.triggerWaveBanner(snap.wave_number);
+            prev_wave = snap.wave_number;
         }
  
-        // 6. Weapon drop offer → show Y/N dialog in GUI
-        {
-            sem_wait(&state->global_mutex);
-            bool  drop_pending = state->pending_drop_offer;
-            int   drop_player  = state->pending_drop_for_player;
-            char  drop_name[32] = {};
-            if (drop_pending) {
-                std::strncpy(drop_name, state->pending_drop_name,
-                             sizeof(drop_name) - 1);
-                drop_name[sizeof(drop_name) - 1] = '\0';
+        // 5. Turn change → update action menu (only while game is running)
+        if (game_still_running) {
+            int  cur_turn       = snap.current_turn_idx;
+            bool is_player_turn = (cur_turn >= 0 && cur_turn < total &&
+                                   snap.entities[cur_turn].is_player &&
+                                   snap.entities[cur_turn].is_my_turn);
+ 
+            if (cur_turn != prev_turn_idx || is_player_turn != prev_turn_player) {
+                prev_turn_idx    = cur_turn;
+                prev_turn_player = is_player_turn;
+                renderer.setPlayerTurn(is_player_turn ? cur_turn : -1, snap);
             }
-            sem_post(&state->global_mutex);
-
-            bool drop_ready = false;
-            if (drop_pending && drop_player >= 0 && drop_player < total) {
-                drop_ready = (drop_player == cur_turn &&
-                              snap.entities[drop_player].is_player &&
-                              snap.entities[drop_player].is_my_turn);
-            }
-
-            if (drop_ready) {
-                // Clear the shared flag — the renderer now owns this decision
+         
+            // 6. Weapon drop offer → show Y/N dialog in GUI
+            {
                 sem_wait(&state->global_mutex);
-                state->pending_drop_offer   = false;
-                state->pending_drop_name[0] = '\0';
-                state->pending_drop_for_player = -1;
+                bool  drop_pending = state->pending_drop_offer;
+                int   drop_player  = state->pending_drop_for_player;
+                char  drop_name[32] = {};
+                if (drop_pending) {
+                    std::strncpy(drop_name, state->pending_drop_name,
+                                 sizeof(drop_name) - 1);
+                    drop_name[sizeof(drop_name) - 1] = '\0';
+                }
                 sem_post(&state->global_mutex);
 
-                // Tell renderer to show the dialog for the right player
-                renderer.showDropOffer(drop_player, drop_name);
+                bool drop_ready = false;
+                int cur_turn2 = snap.current_turn_idx;
+                if (drop_pending && drop_player >= 0 && drop_player < total) {
+                    drop_ready = (drop_player == cur_turn2 &&
+                                  snap.entities[drop_player].is_player &&
+                                  snap.entities[drop_player].is_my_turn);
+                }
 
-                std::printf("[DROP] %s dropped for Player %d — showing dialog\n",
-                            drop_name, drop_player + 1);
+                if (drop_ready) {
+                    sem_wait(&state->global_mutex);
+                    state->pending_drop_offer   = false;
+                    state->pending_drop_name[0] = '\0';
+                    state->pending_drop_for_player = -1;
+                    sem_post(&state->global_mutex);
+
+                    renderer.showDropOffer(drop_player, drop_name);
+
+                    std::printf("[DROP] %s dropped for Player %d — showing dialog\n",
+                                drop_name, drop_player + 1);
+                }
             }
-        }
- 
-        // 7. Poll for completed GUI action (button click or drop dialog choice)
-        GuiAction ga;
-        if (renderer.pollGuiAction(ga)) {
+         
+            // 7. Poll for completed GUI action
+            GuiAction ga;
+            if (renderer.pollGuiAction(ga)) {
+                int live_actor_idx = -1;
+                sem_wait(&state->global_mutex);
+                live_actor_idx = state->current_turn_idx;
+                bool live_is_player = (live_actor_idx >= 0 &&
+                                       live_actor_idx < total &&
+                                       state->entities[live_actor_idx].is_player &&
+                                       state->entities[live_actor_idx].is_my_turn);
+                sem_post(&state->global_mutex);
 
-            // Read the live actor index directly from shared memory under the
-            // action_mutex to avoid using a stale cur_turn from the snapshot.
-            // This prevents overwriting an NPC's pending action_buffer entry.
-            int live_actor_idx = -1;
-            sem_wait(&state->global_mutex);
-            live_actor_idx = state->current_turn_idx;
-            bool live_is_player = (live_actor_idx >= 0 &&
-                                   live_actor_idx < total &&
-                                   state->entities[live_actor_idx].is_player &&
-                                   state->entities[live_actor_idx].is_my_turn);
-            sem_post(&state->global_mutex);
+                if (!live_is_player) {
+                    // Discard the stale GUI action silently.
+                } else {
+                    if (ga.action == ActionType::STRIKE   ||
+                        ga.action == ActionType::EXHAUST   ||
+                        ga.action == ActionType::STUN)
+                    {
+                        if (ga.target_idx >= 0) {
+                            renderer.triggerAttackAnim(live_actor_idx, ga.target_idx);
+                            if (ga.action == ActionType::STUN)
+                                renderer.triggerStunFlash(ga.target_idx);
+                        }
+                    }
 
-            // CRITICAL GUARD: only commit a GUI action when it is genuinely
-            // a player's turn right now.  Stale button clicks that arrive
-            // after the turn has already flipped to an NPC must be discarded.
-            if (!live_is_player) {
-                // Discard the stale GUI action silently.
-            } else {
-                // Animations for attack-type actions
-                if (ga.action == ActionType::STRIKE   ||
-                    ga.action == ActionType::EXHAUST   ||
-                    ga.action == ActionType::STUN)
-                {
-                    if (ga.target_idx >= 0) {
+                    if (ga.action == ActionType::USE_WEAPON &&
+                        ga.weapon_slot >= 0 && ga.target_idx >= 0)
+                    {
+                        const char* wname = "";
+                        if (live_actor_idx >= 0 && live_actor_idx < total &&
+                            ga.weapon_slot < INVENTORY_SLOTS)
+                            wname = snap.entities[live_actor_idx]
+                                        .inventory[ga.weapon_slot].name;
                         renderer.triggerAttackAnim(live_actor_idx, ga.target_idx);
-                        if (ga.action == ActionType::STUN)
-                            renderer.triggerStunFlash(ga.target_idx);
+                        renderer.triggerWeaponFloat(live_actor_idx, ga.target_idx, wname);
+                        renderer.triggerHitFlash(ga.target_idx);
+                    }
+
+                    sem_wait(&state->action_mutex);
+                    state->action_buffer.action      = ga.action;
+                    state->action_buffer.actor_idx   = live_actor_idx;
+                    state->action_buffer.target_idx  = ga.target_idx;
+                    state->action_buffer.weapon_slot = ga.weapon_slot;
+                    sem_post(&state->action_mutex);
+
+                    sem_wait(&state->global_mutex);
+                    state->entities[live_actor_idx].action_ready = true;
+                    sem_post(&state->global_mutex);
+
+                    std::printf("[GUI ACTION] %s: action=%d target=%d slot=%d\n",
+                        snap.entities[live_actor_idx].name,
+                        (int)ga.action, ga.target_idx, ga.weapon_slot);
+
+                    if (ga.action == ActionType::QUIT) {
+                        state->game_running = false;
+                        break;
                     }
                 }
-
-                // Weapon float for USE_WEAPON with real slot (not pickup sentinel)
-                if (ga.action == ActionType::USE_WEAPON &&
-                    ga.weapon_slot >= 0 && ga.target_idx >= 0)
-                {
-                    const char* wname = "";
-                    if (live_actor_idx >= 0 && live_actor_idx < total &&
-                        ga.weapon_slot < INVENTORY_SLOTS)
-                        wname = snap.entities[live_actor_idx]
-                                    .inventory[ga.weapon_slot].name;
-                    renderer.triggerAttackAnim(live_actor_idx, ga.target_idx);
-                    renderer.triggerWeaponFloat(live_actor_idx, ga.target_idx, wname);
-                    renderer.triggerHitFlash(ga.target_idx);
-                }
-
-                // Write action into shared memory using the live actor index,
-                // not the potentially-stale cur_turn from the snapshot.
-                sem_wait(&state->action_mutex);
-                state->action_buffer.action      = ga.action;
-                state->action_buffer.actor_idx   = live_actor_idx;
-                state->action_buffer.target_idx  = ga.target_idx;
-                state->action_buffer.weapon_slot = ga.weapon_slot;
-                sem_post(&state->action_mutex);
-
-                sem_wait(&state->global_mutex);
-                state->entities[live_actor_idx].action_ready = true;
-                sem_post(&state->global_mutex);
-
-                std::printf("[GUI ACTION] %s: action=%d target=%d slot=%d\n",
-                    snap.entities[live_actor_idx].name,
-                    (int)ga.action, ga.target_idx, ga.weapon_slot);
-
-                if (ga.action == ActionType::QUIT) {
-                    state->game_running = false;
-                    break;
-                }
             }
-        }
+        } // end if (game_still_running)
  
         // 8. Render
         renderer.render(snap);
-        // During NPC turns sleep longer so the scheduling loop can acquire
-        // global_mutex quickly for the action_ready poll.
-        bool npc_turn = (cur_turn >= 0 && cur_turn < total && !snap.entities[cur_turn].is_player);
+
+        if (!game_still_running && !end_screen_shown) {
+            end_screen_shown = true;
+            // Leave the end screen visible — keep rendering until window closed.
+        }
+
+        bool npc_turn = game_still_running &&
+                        (snap.current_turn_idx >= 0 &&
+                         snap.current_turn_idx < total &&
+                         !snap.entities[snap.current_turn_idx].is_player);
         usleep(npc_turn ? 200000 : 16000);
     }
  
