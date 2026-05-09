@@ -18,6 +18,12 @@ struct RenderSnapshot {
     int  log_head;
     char log[ACTION_LOG_LINES][ACTION_LOG_WIDTH];
 
+    // Wave / end-game state (added for wave system)
+    int  wave_number    = 1;
+    int  enemies_killed = 0;
+    bool game_won       = false;
+    bool game_lost      = false;
+
     struct EntitySnap {
         char  name[32];
         bool  is_player;
@@ -132,6 +138,9 @@ public:
     // Show a weapon drop pickup dialog for a player.
     void showDropOffer(int player_idx, const char* weapon_name);
 
+    // Trigger the "Wave N incoming!" banner (called when wave_number changes).
+    void triggerWaveBanner(int wave_number);
+
     void stepAnimations(float dt_seconds);
 
 private:
@@ -159,6 +168,11 @@ private:
     void drawText(const std::string& str, float x, float y,
                   unsigned int size, sf::Color col,
                   sf::Color outline = sf::Color::Black);
+
+    // Wave & end-screen overlays
+    void drawWaveBanner();
+    void drawVictoryScreen();
+    void drawGameOverScreen();
 
     // ---- input helpers -----------------------------------------------------
     void handleMouseMove(sf::Vector2f mp);
@@ -208,6 +222,14 @@ private:
     // Drop offer dialog state
     char  m_drop_weapon_name[32] = {};
     int   m_drop_for_player      = -1;
+
+    // Wave banner state
+    bool  m_wave_banner_active = false;
+    float m_wave_banner_t      = 0.f;  // counts up from 0; banner visible while < 3.0 s
+    int   m_wave_banner_number = 1;
+
+    // End-screen animation time
+    float m_end_screen_t = 0.f;
 
     static constexpr unsigned int kFontLg = 26u;
     static constexpr unsigned int kFontMd = 19u;

@@ -100,4 +100,12 @@ struct GlobalState {
     char pending_drop_name[32];      // Name of the dropped weapon - written by Arbiter, read by HIP
     int pending_drop_for_player;     // Index of the player who should be offered the drop - written by Arbiter, read by HIP
     bool eclipse_relic_dropped;      // Set when the eclipse relic has appeared and should drop
+
+    // ---- Wave system --------------------------------------------------------
+    int  wave_number;          // Current wave (1-based) - read by all, written by Arbiter
+    bool wave_spawn_pending;   // True when ASP should spawn new NPC threads - written by Arbiter, read by ASP
+    int  wave_spawn_count;     // How many new NPCs to spawn in the next wave - written by Arbiter, read by ASP
+    int  wave_spawn_indices[MAX_NPCS]; // Entity indices of the newly spawned NPCs - written by Arbiter, read by ASP
+    bool game_won;             // Set when players win (10 enemies killed) - read by renderer
+    bool game_lost;            // Set when all players die - read by renderer
 };

@@ -18,6 +18,10 @@ RenderSnapshot captureSnapshot(GlobalState* state) {
     snap.ultimate_active  = state->ultimate_active;
     snap.current_turn_idx = state->current_turn_idx;
     snap.log_head         = state->log_head;
+    snap.wave_number      = state->wave_number;
+    snap.enemies_killed   = state->enemies_killed;
+    snap.game_won         = state->game_won;
+    snap.game_lost        = state->game_lost;
 
     for (int i = 0; i < ACTION_LOG_LINES; ++i)
         std::memcpy(snap.log[i], state->log[i], ACTION_LOG_WIDTH);
@@ -235,6 +239,12 @@ void Renderer::triggerDeath(int entity_idx) {
     // nothing extra needed here; kept for API completeness
 }
 
+void Renderer::triggerWaveBanner(int wave_number) {
+    m_wave_banner_active = true;
+    m_wave_banner_t      = 0.f;
+    m_wave_banner_number = wave_number;
+}
+
 // ---------------------------------------------------------------------------
 // stepAnimations
 // ---------------------------------------------------------------------------
@@ -319,6 +329,18 @@ void Renderer::stepAnimations(float dt) {
         // ---- turn pulse --------------------------------------------------
         a.pulse_t += dt * PULSE_SPD;
     }
+
+    // ---- wave banner timer -----------------------------------------------
+    if (m_wave_banner_active) {
+        m_wave_banner_t += dt;
+        if (m_wave_banner_t >= 3.0f) {
+            m_wave_banner_active = false;
+            m_wave_banner_t      = 0.f;
+        }
+    }
+
+    // ---- end screen timer ------------------------------------------------
+    m_end_screen_t += dt;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +361,10 @@ void Renderer::render(const RenderSnapshot& snap) {
             m_anims[i].dead_confirmed = true;
             m_anims[i].death_alpha    = 255.f;
         }
+        if (snap.entities[i].is_alive && m_anims[i].dead_confirmed) {
+            m_anims[i].dead_confirmed = false;
+            m_anims[i].death_alpha    = 0.f;
+        }
         if (!snap.entities[i].is_my_turn)
             m_anims[i].pulse_t = 0.f;
     }
@@ -357,6 +383,14 @@ void Renderer::render(const RenderSnapshot& snap) {
     else if (m_phase == InputPhase::DROP_OFFER)       drawDropOfferDialog();
 
     if (snap.ultimate_active) drawUltimateOverlay();
+
+    // Wave banner drawn on top of everything (except end-screens)
+    if (m_wave_banner_active) drawWaveBanner();
+
+    // End-screen overlays (these supersede all other UI)
+    if (snap.game_won)       drawVictoryScreen();
+    else if (snap.game_lost) drawGameOverScreen();
+
     drawStatusBar(snap);
     m_window.display();
 }
@@ -759,8 +793,15 @@ void Renderer::drawStatusBar(const RenderSnapshot& snap) {
         drawText(msg, 12.f, sy + 10.f, kFontMd, C::WHITE);
     }
     if (snap.ultimate_active)
-        drawText("ULTIMATE ACTIVE", m_win_w - 200.f, sy + 10.f,
+        drawText("ULTIMATE ACTIVE", m_win_w - 400.f, sy + 10.f,
                  kFontMd, sf::Color(255, 220, 60, 255));
+
+    // Wave indicator and kill counter
+    char wave_buf[64];
+    std::snprintf(wave_buf, sizeof(wave_buf), "Wave %d   Kills: %d/10",
+                  snap.wave_number, snap.enemies_killed);
+    drawText(wave_buf, m_win_w / 2.f - 80.f, sy + 10.f,
+             kFontMd, sf::Color(180, 255, 180, 255));
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,6 +1059,240 @@ void Renderer::drawUltimateOverlay() {
     m_window.draw(m_text);
     m_sprites.drawStatusIcon(m_window, "ultimate",
                               {(m_win_w-40.f)/2.f-60.f, 8.f}, {28.f,28.f});
+}
+
+// ---------------------------------------------------------------------------
+// drawWaveBanner  – "WAVE N INCOMING!" displayed for ~3 seconds centre-screen
+// ---------------------------------------------------------------------------
+void Renderer::drawWaveBanner() {
+    // Fade in over 0.3 s, hold, fade out over 0.4 s at end.
+    const float TOTAL  = 3.0f;
+    const float FADEIN = 0.3f;
+    const float FADEOUT= 0.4f;
+
+    float t = m_wave_banner_t;
+    float alpha_f = 1.f;
+    if (t < FADEIN)
+        alpha_f = t / FADEIN;
+    else if (t > TOTAL - FADEOUT)
+        alpha_f = (TOTAL - t) / FADEOUT;
+    if (alpha_f < 0.f) alpha_f = 0.f;
+    if (alpha_f > 1.f) alpha_f = 1.f;
+    sf::Uint8 a = (sf::Uint8)(alpha_f * 255.f);
+
+    // Semi-transparent dark panel
+    const float PW = 600.f, PH = 120.f;
+    const float PX = (m_win_w - PW) / 2.f;
+    const float PY = (m_win_h - PH) / 2.f - 40.f;
+
+    m_rect.setSize({PW, PH});
+    m_rect.setPosition(PX, PY);
+    m_rect.setFillColor(sf::Color(5, 8, 20, (sf::Uint8)(alpha_f * 210.f)));
+    m_rect.setOutlineThickness(3.f);
+    m_rect.setOutlineColor(sf::Color(255, 80, 30, a));
+    m_window.draw(m_rect);
+
+    // "WAVE N" in large red-orange text
+    char line1[64];
+    std::snprintf(line1, sizeof(line1), "WAVE %d", m_wave_banner_number);
+    m_text.setFont(m_font);
+    m_text.setString(line1);
+    m_text.setCharacterSize(52u);
+    m_text.setFillColor(sf::Color(255, 90, 20, a));
+    m_text.setOutlineColor(sf::Color(0, 0, 0, a));
+    m_text.setOutlineThickness(3.f);
+    m_text.setStyle(sf::Text::Bold);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 8.f);
+    }
+    m_window.draw(m_text);
+
+    // Sub-line "INCOMING!" in white
+    m_text.setString("INCOMING!");
+    m_text.setCharacterSize(26u);
+    m_text.setFillColor(sf::Color(255, 220, 180, a));
+    m_text.setOutlineColor(sf::Color(0, 0, 0, a));
+    m_text.setOutlineThickness(2.f);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 72.f);
+    }
+    m_window.draw(m_text);
+    m_text.setStyle(sf::Text::Regular);
+}
+
+// ---------------------------------------------------------------------------
+// drawVictoryScreen  – beautiful "CONGRATULATIONS YOU WON!" popup
+// ---------------------------------------------------------------------------
+void Renderer::drawVictoryScreen() {
+    // Advance own timer via m_end_screen_t (already ticked in stepAnimations)
+    float t = m_end_screen_t;
+
+    // Pulsing gold border alpha
+    float pulse = 0.5f + 0.5f * std::sin(t * 3.f);
+    sf::Uint8 ba = (sf::Uint8)(160.f + 90.f * pulse);
+
+    // Dark vignette overlay
+    m_rect.setSize({m_win_w, m_win_h});
+    m_rect.setPosition(0.f, 0.f);
+    m_rect.setFillColor(sf::Color(0, 0, 0, 180));
+    m_rect.setOutlineThickness(0.f);
+    m_window.draw(m_rect);
+
+    // Glowing border strips
+    auto glow = [&](float x, float y, float w, float h) {
+        m_rect.setSize({w, h});
+        m_rect.setPosition(x, y);
+        m_rect.setFillColor(sf::Color(255, 215, 0, ba));
+        m_rect.setOutlineThickness(0.f);
+        m_window.draw(m_rect);
+    };
+    const float BW = 6.f;
+    glow(0, 0, m_win_w, BW);
+    glow(0, m_win_h - BW, m_win_w, BW);
+    glow(0, 0, BW, m_win_h);
+    glow(m_win_w - BW, 0, BW, m_win_h);
+
+    // Central panel
+    const float PW = 760.f, PH = 280.f;
+    const float PX = (m_win_w - PW) / 2.f;
+    const float PY = (m_win_h - PH) / 2.f;
+    m_rect.setSize({PW, PH});
+    m_rect.setPosition(PX, PY);
+    m_rect.setFillColor(sf::Color(8, 18, 8, 240));
+    m_rect.setOutlineThickness(4.f);
+    m_rect.setOutlineColor(sf::Color(255, 215, 0, ba));
+    m_window.draw(m_rect);
+
+    // "CONGRATULATIONS!" title
+    m_text.setFont(m_font);
+    m_text.setString("CONGRATULATIONS!");
+    m_text.setCharacterSize(50u);
+    m_text.setFillColor(sf::Color(255, 215, 0, 255));
+    m_text.setOutlineColor(sf::Color(0, 0, 0, 255));
+    m_text.setOutlineThickness(3.f);
+    m_text.setStyle(sf::Text::Bold);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 18.f);
+    }
+    m_window.draw(m_text);
+
+    // "YOU WON!" in bright green
+    m_text.setString("YOU WON!");
+    m_text.setCharacterSize(64u);
+    m_text.setFillColor(sf::Color(80, 255, 100, 255));
+    m_text.setOutlineColor(sf::Color(0, 0, 0, 255));
+    m_text.setOutlineThickness(4.f);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 88.f);
+    }
+    m_window.draw(m_text);
+
+    // "All enemies defeated!" subtitle
+    m_text.setString("All enemies defeated!");
+    m_text.setCharacterSize(26u);
+    m_text.setFillColor(sf::Color(200, 255, 200, 230));
+    m_text.setOutlineColor(sf::Color(0, 0, 0, 200));
+    m_text.setOutlineThickness(2.f);
+    m_text.setStyle(sf::Text::Regular);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 178.f);
+    }
+    m_window.draw(m_text);
+
+    // "Close window to exit" hint (dim)
+    m_text.setString("Close the window to exit.");
+    m_text.setCharacterSize(18u);
+    m_text.setFillColor(sf::Color(160, 160, 160, 200));
+    m_text.setOutlineThickness(0.f);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 230.f);
+    }
+    m_window.draw(m_text);
+}
+
+// ---------------------------------------------------------------------------
+// drawGameOverScreen  – "GAME OVER – All players defeated"
+// ---------------------------------------------------------------------------
+void Renderer::drawGameOverScreen() {
+    float t = m_end_screen_t;
+    float pulse = 0.5f + 0.5f * std::sin(t * 2.5f);
+    sf::Uint8 ba = (sf::Uint8)(140.f + 100.f * pulse);
+
+    // Blood-red vignette
+    m_rect.setSize({m_win_w, m_win_h});
+    m_rect.setPosition(0.f, 0.f);
+    m_rect.setFillColor(sf::Color(20, 0, 0, 170));
+    m_rect.setOutlineThickness(0.f);
+    m_window.draw(m_rect);
+
+    // Pulsing red border
+    auto glow = [&](float x, float y, float w, float h) {
+        m_rect.setSize({w, h});
+        m_rect.setPosition(x, y);
+        m_rect.setFillColor(sf::Color(200, 20, 20, ba));
+        m_rect.setOutlineThickness(0.f);
+        m_window.draw(m_rect);
+    };
+    const float BW = 6.f;
+    glow(0, 0, m_win_w, BW);
+    glow(0, m_win_h - BW, m_win_w, BW);
+    glow(0, 0, BW, m_win_h);
+    glow(m_win_w - BW, 0, BW, m_win_h);
+
+    // Central panel
+    const float PW = 700.f, PH = 260.f;
+    const float PX = (m_win_w - PW) / 2.f;
+    const float PY = (m_win_h - PH) / 2.f;
+    m_rect.setSize({PW, PH});
+    m_rect.setPosition(PX, PY);
+    m_rect.setFillColor(sf::Color(18, 4, 4, 245));
+    m_rect.setOutlineThickness(4.f);
+    m_rect.setOutlineColor(sf::Color(200, 20, 20, ba));
+    m_window.draw(m_rect);
+
+    // "GAME OVER"
+    m_text.setFont(m_font);
+    m_text.setString("GAME OVER");
+    m_text.setCharacterSize(60u);
+    m_text.setFillColor(sf::Color(220, 30, 30, 255));
+    m_text.setOutlineColor(sf::Color(0, 0, 0, 255));
+    m_text.setOutlineThickness(4.f);
+    m_text.setStyle(sf::Text::Bold);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 20.f);
+    }
+    m_window.draw(m_text);
+
+    // "All players defeated."
+    m_text.setString("All players defeated.");
+    m_text.setCharacterSize(30u);
+    m_text.setFillColor(sf::Color(255, 160, 160, 230));
+    m_text.setOutlineColor(sf::Color(0, 0, 0, 200));
+    m_text.setOutlineThickness(2.f);
+    m_text.setStyle(sf::Text::Regular);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 110.f);
+    }
+    m_window.draw(m_text);
+
+    // "Close window to exit"
+    m_text.setString("Close the window to exit.");
+    m_text.setCharacterSize(18u);
+    m_text.setFillColor(sf::Color(160, 100, 100, 200));
+    m_text.setOutlineThickness(0.f);
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition((m_win_w - tb.width) / 2.f, PY + 210.f);
+    }
+    m_window.draw(m_text);
 }
 
 // ---------------------------------------------------------------------------
