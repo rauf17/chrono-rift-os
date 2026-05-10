@@ -1,0 +1,8 @@
+# Chrono Rift - Extra Package Dependencies
+# List any additional apt packages required beyond the Dockerfile defaults.
+# The following are already provided by the Dockerfile and must NOT be repeated here:
+# build-essential, cmake, gdb
+# libsfml-dev, libsdl2-dev, libglfw3-dev, libncurses-dev
+#
+# This project requires no additional packages beyond the Dockerfile defaults.
+# Leave this file as-is unless a new dependency is introduced.

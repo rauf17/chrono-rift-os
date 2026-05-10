@@ -1,0 +1,37 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.out
+*.exe
+
+# Executables
+arbiter/arbiter
+hip/hip
+asp/asp
+submission/arbiter/arbiter
+submission/hip/hip
+submission/asp/asp
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build directories
+build/
+dist/
+bin/
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
