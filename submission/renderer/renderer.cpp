@@ -103,6 +103,7 @@ static GuiButton makeButton(float x, float y, float w, float h,
 static void drawButton(sf::RenderWindow& win, sf::RectangleShape& rect,
                         sf::Text& text, sf::Font& font,
                         const GuiButton& btn);
+static int parseBracketIndex(const GuiButton& btn);
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -620,6 +621,26 @@ bool Renderer::pollEvents() {
             ev.mouseButton.button == sf::Mouse::Left)
             handleMouseClick({(float)ev.mouseButton.x,
                                (float)ev.mouseButton.y}, m_cached_snap);
+        // Keyboard target selection (0-9 keys)
+        if (ev.type == sf::Event::KeyPressed && m_phase == InputPhase::TARGET_SELECT) {
+            if (ev.key.code >= sf::Keyboard::Num0 && ev.key.code <= sf::Keyboard::Num9) {
+                int key_num = ev.key.code - sf::Keyboard::Num0;
+                // Try to find target with matching index
+                for (const auto& btn : m_target_buttons) {
+                    int target_idx = parseBracketIndex(btn);
+                    if (target_idx == key_num) {
+                        // Select this target
+                        int saved_slot = m_pending_gui_action.weapon_slot;
+                        m_pending_gui_action.ready       = true;
+                        m_pending_gui_action.action      = m_pending_action;
+                        m_pending_gui_action.target_idx  = target_idx;
+                        m_pending_gui_action.weapon_slot = saved_slot;
+                        m_phase = InputPhase::NONE;
+                        return true;
+                    }
+                }
+            }
+        }
         // Escape closes the victory / game-over end screen gracefully
         if (ev.type == sf::Event::KeyPressed &&
             ev.key.code == sf::Keyboard::Escape) {
@@ -1285,11 +1306,43 @@ void Renderer::drawStatusBar(const RenderSnapshot& snap) {
         const auto& e = snap.entities[idx];
         std::string msg;
         if (e.is_my_turn) {
-            msg = std::string(e.name) + "'s turn";
-            if (e.is_player && m_phase != InputPhase::NONE)
-                msg += "  —  Choose an action";
-            else if (!e.is_player)
+            // Calculate player number for players (1-indexed)
+            if (e.is_player) {
+                // Build player_ids array to match battlefield logic
+                int player_ids[MAX_ENTITIES] = {};
+                int p_count = 0;
+                int total = snap.player_count + snap.npc_count;
+                for (int i = 0; i < total && i < MAX_ENTITIES; ++i) {
+                    if (snap.entities[i].is_player)
+                        player_ids[p_count++] = i;
+                }
+                
+                // Find which position in player_ids array this entity is at
+                int logical_pos = -1;
+                for (int i = 0; i < p_count; ++i) {
+                    if (player_ids[i] == idx) {
+                        logical_pos = i;
+                        break;
+                    }
+                }
+                
+                int display_pos = logical_pos;
+                // Apply swap logic if there are more than 3 players (2 columns)
+                int p_cols = (p_count > 3) ? 2 : 1;
+                if (p_cols == 2 && p_count > 1 && logical_pos >= 0 && logical_pos <= 3) {
+                    display_pos = (logical_pos % 2 == 0) ? logical_pos + 1 : logical_pos - 1;
+                }
+                
+                int player_num = display_pos + 1;
+                char pbuf[32];
+                std::snprintf(pbuf, sizeof(pbuf), "Player %d's turn", player_num);
+                msg = pbuf;
+                if (m_phase != InputPhase::NONE)
+                    msg += "  —  Choose an action";
+            } else {
+                msg = std::string(e.name) + "'s turn";
                 msg += "  —  Enemy is thinking...";
+            }
         }
         drawText(msg, 12.f, sy + 10.f, kFontMd, C::WHITE);
     }
@@ -1299,7 +1352,7 @@ void Renderer::drawStatusBar(const RenderSnapshot& snap) {
 
     // Wave indicator and kill counter
     char wave_buf[64];
-    std::snprintf(wave_buf, sizeof(wave_buf), "Wave %d   Kills: %d/10",
+    std::snprintf(wave_buf, sizeof(wave_buf), "Wave %d   Kills: %d/10   [Press 0-9 to select target]",
                   snap.wave_number, snap.enemies_killed);
     drawText(wave_buf, m_win_w / 2.f - 80.f, sy + 10.f,
              kFontMd, sf::Color(180, 255, 180, 255));

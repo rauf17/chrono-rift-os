@@ -401,13 +401,10 @@ static void spawnNextWave(GlobalState* state) {
 // The loop unlocks the shared state before waiting for action_ready,
 // allowing HIP or ASP to write the chosen action.
 void schedulingLoop(GlobalState* state) {
-    // Side-alternation: after all players on one side have acted once,
-    // give the other side a turn. We track this with a simple flag:
-    // after ANY player acts we want an NPC next, and after ANY NPC acts
-    // we want a player next. Within each side we pick by highest stamina
-    // so fast entities go first. If the preferred side has no one ready
-    // we fall back to any ready entity to avoid deadlock.
-    bool want_npc_next = false; // start by giving players the first go
+    // Pure stamina-based scheduling (spec Section 3):
+    // Each second all entities gain speed stamina. The first entity to reach
+    // max_stamina acts. Ties broken randomly. No side-alternation — the math
+    // handles fairness naturally when NPC speeds are competitive.
 
     while (state->game_running && !shutdown_requested.load()) {
         struct timespec ts = {1, 0};
@@ -418,7 +415,8 @@ void schedulingLoop(GlobalState* state) {
         int total_entities = state->player_count + state->npc_count;
         int actor_idx = -1;
 
-        // Accumulate stamina for all alive, non-stunned entities.
+        // ── Stamina accumulation ──────────────────────────────────────────
+        // Spec: "each second the entity's speed is added to its current stamina"
         for (int i = 0; i < total_entities; ++i) {
             Entity& entity = state->entities[i];
             if (!entity.is_alive || entity.is_stunned) continue;
@@ -427,34 +425,20 @@ void schedulingLoop(GlobalState* state) {
                 entity.stamina = entity.max_stamina;
         }
 
-        // Collect all ready entities on the preferred side, then pick one
-        // randomly so no single entity hogs turns within its side.
-        bool want_player = !want_npc_next;
+        // ── Actor selection ───────────────────────────────────────────────
+        // Spec: "only the first entity to reach full capacity threshold acts"
+        // Collect all entities at max stamina and pick one randomly (fair ties).
         int candidates[MAX_ENTITIES];
         int cand_count = 0;
-
         for (int i = 0; i < total_entities; ++i) {
             Entity& entity = state->entities[i];
             if (!entity.is_alive || entity.is_stunned) continue;
             if (entity.stamina < entity.max_stamina) continue;
-            if (entity.is_player != want_player) continue;
             candidates[cand_count++] = i;
         }
 
-        if (cand_count > 0) {
-            // Random pick among all ready entities on the preferred side.
+        if (cand_count > 0)
             actor_idx = candidates[rand() % cand_count];
-        } else {
-            // Fallback: preferred side not ready — pick randomly from any side.
-            for (int i = 0; i < total_entities; ++i) {
-                Entity& entity = state->entities[i];
-                if (!entity.is_alive || entity.is_stunned) continue;
-                if (entity.stamina < entity.max_stamina) continue;
-                candidates[cand_count++] = i;
-            }
-            if (cand_count > 0)
-                actor_idx = candidates[rand() % cand_count];
-        }
 
         if (actor_idx == -1) {
             sem_post(&state->global_mutex);
@@ -463,85 +447,89 @@ void schedulingLoop(GlobalState* state) {
 
         state->current_turn_idx = actor_idx;
         Entity& actor = state->entities[actor_idx];
-        actor.is_my_turn = true;
-        actor.action_ready = false;
+        actor.is_my_turn    = true;
+        actor.action_ready  = false;
 
-        state->action_buffer.action = ActionType::NONE;
-        state->action_buffer.actor_idx = actor_idx;
-        state->action_buffer.target_idx = -1;
+        state->action_buffer.action      = ActionType::NONE;
+        state->action_buffer.actor_idx   = actor_idx;
+        state->action_buffer.target_idx  = -1;
         state->action_buffer.weapon_slot = -1;
 
+        std::fprintf(stderr, "[SCHED] Turn: %s (idx=%d, stamina=%.0f/%.0f)\n",
+                     actor.name, actor_idx, actor.stamina, actor.max_stamina);
+
         sem_post(&state->global_mutex);
+
+        // Give ASP 200ms to notice is_my_turn before we start polling.
         struct timespec asp_yield = {0, 200 * 1000 * 1000};
         nanosleep(&asp_yield, nullptr);
 
-        // Wait for the selected entity to set action_ready.
-        // We poll because the shared action_ready flag is a simple cross-process signal,
-        // and no blocking primitive exists for this shared-flag protocol yet.
+        // ── Wait for action_ready ─────────────────────────────────────────
         if (actor.is_player) {
+            // Players: wait indefinitely (human might take time to click).
+            std::fprintf(stderr, "[SCHED] Waiting for player %s (idx=%d) to act...\n",
+                         actor.name, actor_idx);
             while (state->game_running) {
-                // Poll without mutex to avoid starving renderThreadSFML and
-                // the NPC threads.  The GUI thread writes action_ready under
-                // the mutex so visibility is guaranteed on all platforms.
-                if (state->entities[actor_idx].action_ready) {
-                    break;
-                }
+                if (state->entities[actor_idx].action_ready) break;
                 struct timespec wait_ts = {0, 100 * 1000 * 1000};
                 nanosleep(&wait_ts, nullptr);
             }
+            std::fprintf(stderr, "[SCHED] Player %s submitted action\n", actor.name);
+
         } else {
+            // NPCs: spec Section 8 — timeout after exactly 3 seconds → force SKIP.
+            std::fprintf(stderr, "[SCHED] Waiting for NPC %s (idx=%d) to act (3s timeout)...\n",
+                         actor.name, actor_idx);
             int elapsed_checks = 0;
-            const int max_checks = 100; // 10 seconds max
+            const int max_checks = 30;  // 30 × 100ms = 3 seconds (spec requirement)
             bool ready = false;
             while (state->game_running && elapsed_checks < max_checks) {
                 struct timespec wait_ts = {0, 100 * 1000 * 1000};
                 nanosleep(&wait_ts, nullptr);
-                // Must use the mutex here: action_ready is written by the ASP
-                // child *process* (not just a thread), so a CPU memory barrier
-                // is required for the write to be visible.  sem_wait/post
-                // provide that barrier on Linux for MAP_SHARED memory.
+                // sem_wait/post provides cross-process memory barrier so the
+                // ASP's write to action_ready is visible to this process.
                 sem_wait(&state->global_mutex);
                 ready = state->entities[actor_idx].action_ready;
                 sem_post(&state->global_mutex);
-                if (ready) {
-                    break;
-                }
+                if (ready) break;
                 elapsed_checks++;
             }
+
             if (!ready && state->game_running) {
-                std::fprintf(stderr, "[SCHED] NPC %d timed out — forcing SKIP\n", actor_idx);
+                std::fprintf(stderr, "[SCHED] NPC %s (idx=%d) timed out after 3s — forcing SKIP\n",
+                             actor.name, actor_idx);
                 sem_wait(&state->global_mutex);
-                state->action_buffer.action = ActionType::SKIP;
+                state->action_buffer.action    = ActionType::SKIP;
                 state->action_buffer.actor_idx = actor_idx;
                 state->entities[actor_idx].action_ready = true;
                 sem_post(&state->global_mutex);
             } else {
-                // Log what action the NPC actually submitted so we can verify
                 sem_wait(&state->global_mutex);
-                std::fprintf(stderr, "[SCHED] NPC %d ready: action=%d target=%d\n",
-                             actor_idx,
+                std::fprintf(stderr, "[SCHED] NPC %s (idx=%d) submitted: action=%d target=%d\n",
+                             actor.name, actor_idx,
                              (int)state->action_buffer.action,
                              state->action_buffer.target_idx);
                 sem_post(&state->global_mutex);
             }
         }
 
-        // Debug: log what we're about to commit
+        // ── Commit ────────────────────────────────────────────────────────
         {
             sem_wait(&state->global_mutex);
-            std::fprintf(stderr, "[SCHED] committing: actor=%d action=%d target=%d\n",
+            std::fprintf(stderr, "[SCHED] Committing: actor=%s (idx=%d) action=%d target=%d\n",
+                         state->entities[state->action_buffer.actor_idx].name,
                          state->action_buffer.actor_idx,
                          (int)state->action_buffer.action,
                          state->action_buffer.target_idx);
             sem_post(&state->global_mutex);
         }
-        // Flip the side preference: if a player just acted, we want an NPC next.
-        want_npc_next = state->entities[actor_idx].is_player;
 
         commitAction(state);
     }
-}
 
+    std::fprintf(stderr, "[SCHED] Scheduling loop exited (game_running=%d)\n",
+                 (int)state->game_running);
+}
 // Applies the selected action to the game state, logs the result, and checks endgame conditions.
 // This function assumes the action has already been selected and action_ready is true.
 // It locks global_mutex for the entire commit phase to keep state updates atomic.
