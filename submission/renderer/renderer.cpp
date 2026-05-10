@@ -1124,8 +1124,19 @@ void Renderer::drawEntityCard(const RenderSnapshot::EntitySnap& ent,
         const auto& slot = ent.inventory[s];
         if (!slot.occupied || slot.name[0] == '\0' || slot.slot_size <= 0)
             continue;
+        float icon_x = pos.x + 4.f + drawn * 22.f;
+        float icon_y = pos.y + 50.f;
+        float ring_size = 22.f;
+
+        m_rect.setSize({ring_size, ring_size});
+        m_rect.setPosition(icon_x - 2.f, icon_y - 2.f);
+        m_rect.setFillColor(sf::Color(0, 0, 0, 255));
+        m_rect.setOutlineThickness(2.f);
+        m_rect.setOutlineColor(C::BORDER_GOLD);
+        m_window.draw(m_rect);
+
         m_sprites.drawWeaponIcon(m_window, slot.name,
-                                  {pos.x + 4.f + drawn * 22.f, pos.y + 50.f},
+                                  {icon_x, icon_y},
                                   {18.f, 18.f});
         ++drawn;
     }
