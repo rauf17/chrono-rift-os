@@ -5,7 +5,6 @@
 #include <csignal>
 #include <cerrno>
 #include <cstdio>
-#include <atomic>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -24,8 +23,8 @@
 static GlobalState* g_state = nullptr;
 static pid_t g_hip_pid = -1;
 static pid_t g_asp_pid = -1;
-static std::atomic_bool shutdown_requested{false};
-static std::atomic_bool ultimate_window_ended{false};
+static volatile sig_atomic_t shutdown_requested = 0;
+static volatile sig_atomic_t ultimate_window_ended = 0;
 static const char kUltimateEndedMsg[] = "Ultimate window has ended.";
 static bool g_tui_mode = false;
 
@@ -86,7 +85,7 @@ void cleanupAndExit(GlobalState* state, pid_t hip_pid, pid_t asp_pid) {
 // Sets the shutdown flag and clears the game-running state.
 void arbiterSigtermHandler(int signum) {
     (void)signum;
-    shutdown_requested.store(true);
+    shutdown_requested = 1;
     if (g_state) {
         g_state->game_running = false;
     }
@@ -97,7 +96,7 @@ void handleSIGALRM(int signum) {
     if (g_asp_pid > 0) {
         kill(g_asp_pid, SIGCONT);
     }
-    ultimate_window_ended.store(true);
+    ultimate_window_ended = 1;
 }
 
 static int artifactIndexFromName(const char* name) {
@@ -406,7 +405,7 @@ void schedulingLoop(GlobalState* state) {
     // max_stamina acts. Ties broken randomly. No side-alternation — the math
     // handles fairness naturally when NPC speeds are competitive.
 
-    while (state->game_running && !shutdown_requested.load()) {
+    while (state->game_running && !shutdown_requested) {
         struct timespec ts = {1, 0};
         nanosleep(&ts, nullptr);
 
@@ -1067,7 +1066,9 @@ void commitAction(GlobalState* state) {
 
     sem_wait(&state->global_mutex);
 
-    if (ultimate_window_ended.exchange(false)) {
+    bool ultimate_ended = ultimate_window_ended;
+    ultimate_window_ended = 0;
+    if (ultimate_ended) {
         state->ultimate_active = false;
         appendLogUnsafe(state, kUltimateEndedMsg);
     }
