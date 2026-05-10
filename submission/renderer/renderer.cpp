@@ -145,6 +145,470 @@ Renderer::Renderer(const std::string& assets_path,
 bool Renderer::isOpen() const { return m_window.isOpen(); }
 void Renderer::close()        { m_window.close(); }
 
+
+// ===========================================================================
+// LOGIN SCREEN
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// runLoginScreen  – blocking call, returns when PLAY is pressed or window closes
+// ---------------------------------------------------------------------------
+LoginResult Renderer::runLoginScreen() {
+    m_roll_str.clear();
+    m_players_str.clear();
+    m_login_focus = LoginField::ROLL;
+    m_login_err.clear();
+    m_login_play_hovered = false;
+    m_login_t = 0.f;
+    m_clock.restart();
+
+    LoginResult result{};
+
+    while (m_window.isOpen()) {
+        float dt = m_clock.restart().asSeconds();
+        if (dt > 0.05f) dt = 0.05f;
+        m_login_t += dt;
+
+        sf::Event ev{};
+        while (m_window.pollEvent(ev)) {
+            if (ev.type == sf::Event::Closed) {
+                m_window.close();
+                return result;  // confirmed = false
+            }
+            if (ev.type == sf::Event::TextEntered) {
+                loginHandleTextEntered(ev.text.unicode);
+            }
+            if (ev.type == sf::Event::KeyPressed) {
+                loginHandleKeyPressed(ev.key.code);
+            }
+            if (ev.type == sf::Event::MouseMoved) {
+                sf::Vector2f mp{(float)ev.mouseMove.x, (float)ev.mouseMove.y};
+                // Check play button hover
+                const float BW = 220.f, BH = 52.f;
+                const float BX = m_win_w / 2.f - BW / 2.f;
+                const float BY = m_win_h / 2.f + 140.f;
+                m_login_play_hovered = sf::FloatRect{BX, BY, BW, BH}.contains(mp);
+            }
+            if (ev.type == sf::Event::MouseButtonReleased &&
+                ev.mouseButton.button == sf::Mouse::Left) {
+                loginHandleClick({(float)ev.mouseButton.x, (float)ev.mouseButton.y});
+            }
+        }
+
+        // Draw frame
+        m_window.clear(sf::Color(6, 4, 14));
+        drawLoginScreen(dt);
+        m_window.display();
+
+        // Done flag is set by loginHandleClick or Enter key handling
+        if (m_login_err == "__PLAY__") {
+            result.roll_number  = std::atoi(m_roll_str.c_str());
+            result.player_count = std::atoi(m_players_str.c_str());
+            result.confirmed    = true;
+            return result;
+        }
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// drawLoginScreen
+// ---------------------------------------------------------------------------
+void Renderer::drawLoginScreen(float /*dt*/) {
+    float t = m_login_t;
+    float cx = m_win_w / 2.f;
+    float cy = m_win_h / 2.f;
+
+    // --- Background (reuse game background at low opacity) ---
+    if (m_bg_texture.getSize().x > 0) {
+        m_bg_sprite.setColor(sf::Color(255, 255, 255, 60));
+        m_window.draw(m_bg_sprite);
+    }
+
+    // --- Animated floating particle orbs ---
+    static const float PKX[18] = {
+        0.06f,0.14f,0.23f,0.35f,0.48f,0.62f,0.74f,0.85f,0.92f,
+        0.10f,0.28f,0.41f,0.55f,0.68f,0.79f,0.88f,0.19f,0.60f
+    };
+    static const float PKS[18] = {
+        0.18f,0.12f,0.22f,0.09f,0.16f,0.20f,0.11f,0.25f,0.14f,
+        0.21f,0.13f,0.17f,0.10f,0.23f,0.15f,0.19f,0.08f,0.24f
+    };
+    static const float PKP[18] = {
+        0.0f,0.3f,0.6f,0.1f,0.5f,0.8f,0.2f,0.7f,0.4f,
+        0.9f,0.15f,0.45f,0.75f,0.05f,0.35f,0.65f,0.55f,0.85f
+    };
+    for (int i = 0; i < 18; ++i) {
+        float phase = std::fmod(PKP[i] + t * PKS[i], 1.0f);
+        float orb_y = phase * m_win_h;
+        float orb_x = PKX[i] * m_win_w + 18.f * std::sin(t * 0.8f + i);
+        float sz    = 3.f + (i % 3) * 2.f;
+        float bright = 0.4f + 0.6f * std::abs(std::sin(t * 0.9f + i));
+        sf::Uint8 a = (sf::Uint8)(bright * 140.f);
+        sf::Color pc = (i % 3 == 0) ? sf::Color(150, 60, 255, a)
+                     : (i % 3 == 1) ? sf::Color(60, 160, 255, a)
+                                    : sf::Color(255, 220, 80, a);
+        m_rect.setSize({sz, sz});
+        m_rect.setPosition(orb_x, orb_y);
+        m_rect.setFillColor(pc);
+        m_rect.setOutlineThickness(0.f);
+        m_window.draw(m_rect);
+    }
+
+    // --- Large radial glow behind the panel ---
+    {
+        sf::CircleShape glow(320.f);
+        glow.setOrigin(320.f, 320.f);
+        glow.setPosition(cx, cy - 20.f);
+        glow.setFillColor(sf::Color(80, 20, 160, 30));
+        m_window.draw(glow);
+        glow.setRadius(200.f);
+        glow.setOrigin(200.f, 200.f);
+        glow.setFillColor(sf::Color(100, 30, 200, 40));
+        m_window.draw(glow);
+    }
+
+    // --- Main panel ---
+    const float PW = 560.f, PH = 420.f;
+    const float PX = cx - PW / 2.f;
+    const float PY = cy - PH / 2.f - 20.f;
+
+    // Outer glow border (animated)
+    float border_pulse = 0.5f + 0.5f * std::sin(t * 2.2f);
+    sf::Uint8 bp = (sf::Uint8)(140.f + 80.f * border_pulse);
+    m_rect.setSize({PW + 10.f, PH + 10.f});
+    m_rect.setPosition(PX - 5.f, PY - 5.f);
+    m_rect.setFillColor(sf::Color(0, 0, 0, 0));
+    m_rect.setOutlineThickness(3.f);
+    m_rect.setOutlineColor(sf::Color(160, 60, 255, bp));
+    m_window.draw(m_rect);
+
+    // Inner panel
+    m_rect.setSize({PW, PH});
+    m_rect.setPosition(PX, PY);
+    m_rect.setFillColor(sf::Color(8, 5, 20, 235));
+    m_rect.setOutlineThickness(1.5f);
+    m_rect.setOutlineColor(sf::Color(100, 40, 180, 200));
+    m_window.draw(m_rect);
+
+    // Top accent bar
+    m_rect.setSize({PW, 3.f});
+    m_rect.setPosition(PX, PY);
+    m_rect.setFillColor(sf::Color(180, 80, 255, bp));
+    m_rect.setOutlineThickness(0.f);
+    m_window.draw(m_rect);
+
+    // Bottom accent bar
+    m_rect.setPosition(PX, PY + PH - 3.f);
+    m_window.draw(m_rect);
+
+    // --- Game title inside panel ---
+    m_text.setFont(m_font);
+    m_text.setCharacterSize(46u);
+    m_text.setStyle(sf::Text::Bold);
+    m_text.setFillColor(sf::Color(220, 180, 255, 255));
+    m_text.setOutlineColor(sf::Color(80, 0, 160, 255));
+    m_text.setOutlineThickness(3.f);
+    m_text.setString("CHRONO RIFT");
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition(cx - tb.width / 2.f, PY + 18.f);
+    }
+    m_window.draw(m_text);
+
+    // Subtitle
+    m_text.setCharacterSize(13u);
+    m_text.setStyle(sf::Text::Regular);
+    m_text.setFillColor(sf::Color(140, 100, 200, 200));
+    m_text.setOutlineThickness(0.f);
+    m_text.setString("WAR  OF  THE  BROKEN  AGE");
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition(cx - tb.width / 2.f, PY + 72.f);
+    }
+    m_window.draw(m_text);
+
+    // Divider line
+    m_rect.setSize({PW - 60.f, 1.f});
+    m_rect.setPosition(PX + 30.f, PY + 96.f);
+    m_rect.setFillColor(sf::Color(120, 50, 200, 120));
+    m_rect.setOutlineThickness(0.f);
+    m_window.draw(m_rect);
+
+    // --- Input fields ---
+    auto drawField = [&](const std::string& label,
+                         const std::string& value,
+                         float fy, bool focused, bool isRoll) {
+        // Label
+        m_text.setCharacterSize(13u);
+        m_text.setStyle(sf::Text::Regular);
+        m_text.setFillColor(focused ? sf::Color(200, 160, 255, 255)
+                                    : sf::Color(140, 110, 180, 200));
+        m_text.setOutlineThickness(0.f);
+        m_text.setString(label);
+        m_text.setPosition(PX + 40.f, fy - 22.f);
+        m_window.draw(m_text);
+
+        // Field box
+        float fw = PW - 80.f;
+        float fh = 46.f;
+        float fx = PX + 40.f;
+        m_rect.setSize({fw, fh});
+        m_rect.setPosition(fx, fy);
+        m_rect.setFillColor(focused ? sf::Color(25, 12, 50, 230)
+                                    : sf::Color(15, 8, 30, 200));
+        m_rect.setOutlineThickness(focused ? 2.f : 1.f);
+        m_rect.setOutlineColor(focused ? sf::Color(180, 80, 255, 255)
+                                       : sf::Color(80, 40, 120, 180));
+        m_window.draw(m_rect);
+
+        // Value text
+        std::string display = value;
+        // Blinking cursor when focused
+        if (focused) {
+            bool blink = std::fmod(t * 1.5f, 1.0f) < 0.6f;
+            if (blink) display += "|";
+        }
+        m_text.setCharacterSize(22u);
+        m_text.setFillColor(sf::Color(230, 210, 255, 255));
+        m_text.setString(display.empty() ? (focused ? "|" : "") : display);
+        m_text.setPosition(fx + 14.f, fy + 10.f);
+        m_window.draw(m_text);
+
+        // Hint text when empty and not focused
+        if (value.empty() && !focused) {
+            m_text.setCharacterSize(16u);
+            m_text.setFillColor(sf::Color(80, 60, 120, 160));
+            m_text.setString(isRoll ? "e.g. 23i0591" : "1 – 4");
+            m_text.setPosition(fx + 14.f, fy + 13.f);
+            m_window.draw(m_text);
+        }
+    };
+
+    float field1_y = PY + 118.f;
+    float field2_y = PY + 218.f;
+    drawField("ROLL NUMBER", m_roll_str, field1_y,
+              m_login_focus == LoginField::ROLL, true);
+    drawField("NUMBER OF PLAYERS", m_players_str, field2_y,
+              m_login_focus == LoginField::PLAYERS, false);
+
+    // Player count visual selector (dots)
+    {
+        float dot_y = field2_y + 56.f;
+        float dot_start = PX + 40.f;
+        for (int i = 1; i <= 4; ++i) {
+            float dot_x = dot_start + (i - 1) * 70.f;
+            int chosen = m_players_str.empty() ? 0 : std::atoi(m_players_str.c_str());
+            bool sel = (chosen == i);
+            sf::CircleShape dot(sel ? 20.f : 16.f);
+            dot.setOrigin(dot.getRadius(), dot.getRadius());
+            dot.setPosition(dot_x + 20.f, dot_y + 18.f);
+            dot.setFillColor(sel ? sf::Color(160, 60, 255, 230)
+                                 : sf::Color(40, 20, 80, 180));
+            dot.setOutlineThickness(sel ? 2.f : 1.f);
+            dot.setOutlineColor(sel ? sf::Color(220, 140, 255, 255)
+                                    : sf::Color(100, 60, 160, 180));
+            m_window.draw(dot);
+
+            m_text.setCharacterSize(16u);
+            m_text.setStyle(sf::Text::Bold);
+            m_text.setFillColor(sel ? sf::Color(255, 255, 255, 255)
+                                    : sf::Color(160, 120, 200, 200));
+            m_text.setOutlineThickness(0.f);
+            m_text.setString(std::to_string(i));
+            sf::FloatRect tb = m_text.getLocalBounds();
+            m_text.setPosition(dot_x + 20.f - tb.width / 2.f - 2.f,
+                               dot_y + 18.f - tb.height / 2.f - 4.f);
+            m_window.draw(m_text);
+        }
+        m_text.setStyle(sf::Text::Regular);
+    }
+
+    // --- Error message ---
+    if (!m_login_err.empty() && m_login_err != "__PLAY__") {
+        float err_alpha = std::min(1.f, std::abs(std::sin(t * 4.f))) * 255.f;
+        m_text.setCharacterSize(14u);
+        m_text.setFillColor(sf::Color(255, 80, 80, (sf::Uint8)err_alpha));
+        m_text.setOutlineThickness(0.f);
+        m_text.setString(m_login_err);
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition(cx - tb.width / 2.f, PY + PH - 90.f);
+        m_window.draw(m_text);
+    }
+
+    // --- PLAY button ---
+    {
+        const float BW = 220.f, BH = 52.f;
+        const float BX = cx - BW / 2.f;
+        const float BY = PY + PH - 68.f;
+
+        // Button glow when hovered
+        if (m_login_play_hovered) {
+            m_rect.setSize({BW + 10.f, BH + 10.f});
+            m_rect.setPosition(BX - 5.f, BY - 5.f);
+            m_rect.setFillColor(sf::Color(120, 40, 255, 80));
+            m_rect.setOutlineThickness(0.f);
+            m_window.draw(m_rect);
+        }
+
+        sf::Color btn_fill = m_login_play_hovered
+            ? sf::Color(90, 30, 200, 245)
+            : sf::Color(55, 15, 140, 230);
+        sf::Color btn_border = m_login_play_hovered
+            ? sf::Color(220, 140, 255, 255)
+            : sf::Color(160, 80, 240, 200);
+
+        m_rect.setSize({BW, BH});
+        m_rect.setPosition(BX, BY);
+        m_rect.setFillColor(btn_fill);
+        m_rect.setOutlineThickness(2.f);
+        m_rect.setOutlineColor(btn_border);
+        m_window.draw(m_rect);
+
+        m_text.setCharacterSize(22u);
+        m_text.setStyle(sf::Text::Bold);
+        m_text.setFillColor(sf::Color(230, 200, 255, 255));
+        m_text.setOutlineColor(sf::Color(0, 0, 0, 180));
+        m_text.setOutlineThickness(2.f);
+        m_text.setString("ENTER THE RIFT");
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition(cx - tb.width / 2.f, BY + (BH - tb.height) / 2.f - 4.f);
+        m_window.draw(m_text);
+        m_text.setStyle(sf::Text::Regular);
+        m_text.setOutlineThickness(0.f);
+
+        // Update hover bounds for click detection
+        // (stored as member so loginHandleClick can use it)
+        m_login_play_hovered =
+            sf::FloatRect{BX, BY, BW, BH}.contains(
+                sf::Vector2f(sf::Mouse::getPosition(m_window)));
+    }
+
+    // --- Tab hint ---
+    m_text.setCharacterSize(11u);
+    m_text.setFillColor(sf::Color(80, 60, 120, 160));
+    m_text.setString("TAB to switch fields   |   Click dots or type for player count");
+    {
+        sf::FloatRect tb = m_text.getLocalBounds();
+        m_text.setPosition(cx - tb.width / 2.f, PY + PH + 14.f);
+    }
+    m_window.draw(m_text);
+}
+
+// ---------------------------------------------------------------------------
+// loginHandleTextEntered
+// ---------------------------------------------------------------------------
+void Renderer::loginHandleTextEntered(sf::Uint32 unicode) {
+    m_login_err.clear();
+    if (unicode > 127) return;
+    char c = (char)unicode;
+
+    if (c == 8) {  // backspace
+        if (m_login_focus == LoginField::ROLL && !m_roll_str.empty())
+            m_roll_str.pop_back();
+        else if (m_login_focus == LoginField::PLAYERS && !m_players_str.empty())
+            m_players_str.pop_back();
+        return;
+    }
+    if (c < 32) return;  // ignore control chars
+
+    if (m_login_focus == LoginField::ROLL) {
+        if (m_roll_str.size() < 12)
+            m_roll_str += c;
+    } else if (m_login_focus == LoginField::PLAYERS) {
+        if (std::isdigit(c) && m_players_str.size() < 1)
+            m_players_str = c;  // single digit only
+    }
+}
+
+// ---------------------------------------------------------------------------
+// loginHandleKeyPressed
+// ---------------------------------------------------------------------------
+void Renderer::loginHandleKeyPressed(sf::Keyboard::Key key) {
+    if (key == sf::Keyboard::Tab) {
+        m_login_focus = (m_login_focus == LoginField::ROLL)
+                        ? LoginField::PLAYERS : LoginField::ROLL;
+        m_login_err.clear();
+    }
+    if (key == sf::Keyboard::Return || key == sf::Keyboard::Enter) {
+        // Try to confirm
+        int r = 0, p = 0;
+        if (loginValidate(r, p))
+            m_login_err = "__PLAY__";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// loginHandleClick
+// ---------------------------------------------------------------------------
+void Renderer::loginHandleClick(sf::Vector2f mp) {
+    m_login_err.clear();
+    float cx = m_win_w / 2.f;
+    float cy = m_win_h / 2.f;
+    const float PW = 560.f, PH = 420.f;
+    const float PX = cx - PW / 2.f;
+    const float PY = cy - PH / 2.f - 20.f;
+
+    // Field 1 (roll)
+    if (sf::FloatRect{PX + 40.f, PY + 118.f, PW - 80.f, 46.f}.contains(mp)) {
+        m_login_focus = LoginField::ROLL;
+        return;
+    }
+    // Field 2 (players)
+    if (sf::FloatRect{PX + 40.f, PY + 218.f, PW - 80.f, 46.f}.contains(mp)) {
+        m_login_focus = LoginField::PLAYERS;
+        return;
+    }
+    // Player dots
+    float dot_y = PY + 218.f + 56.f;
+    float dot_start = PX + 40.f;
+    for (int i = 1; i <= 4; ++i) {
+        float dot_x = dot_start + (i - 1) * 70.f;
+        sf::FloatRect dot_rect{dot_x, dot_y, 40.f, 40.f};
+        if (dot_rect.contains(mp)) {
+            m_players_str = std::to_string(i);
+            return;
+        }
+    }
+    // PLAY button
+    const float BW = 220.f, BH = 52.f;
+    const float BX = cx - BW / 2.f;
+    const float BY = PY + PH - 68.f;
+    if (sf::FloatRect{BX, BY, BW, BH}.contains(mp)) {
+        int r = 0, p = 0;
+        if (loginValidate(r, p))
+            m_login_err = "__PLAY__";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// loginValidate
+// ---------------------------------------------------------------------------
+bool Renderer::loginValidate(int& out_roll, int& out_players) {
+    // Parse roll number - accept digits only (strip letters like 23i-0591 → 230591)
+    std::string digits;
+    for (char c : m_roll_str)
+        if (std::isdigit(c)) digits += c;
+
+    if (digits.empty()) {
+        m_login_err = "Please enter your roll number.";
+        return false;
+    }
+    out_roll = std::atoi(digits.c_str());
+
+    if (m_players_str.empty()) {
+        m_login_err = "Please select number of players (1-4).";
+        return false;
+    }
+    out_players = std::atoi(m_players_str.c_str());
+    if (out_players < 1 || out_players > 4) {
+        m_login_err = "Player count must be between 1 and 4.";
+        return false;
+    }
+    m_login_err.clear();
+    return true;
+}
+
 bool Renderer::pollEvents() {
     handleMouseMove(sf::Vector2f(sf::Mouse::getPosition(m_window)));
     sf::Event ev{};
@@ -156,6 +620,14 @@ bool Renderer::pollEvents() {
             ev.mouseButton.button == sf::Mouse::Left)
             handleMouseClick({(float)ev.mouseButton.x,
                                (float)ev.mouseButton.y}, m_cached_snap);
+        // Escape closes the victory / game-over end screen gracefully
+        if (ev.type == sf::Event::KeyPressed &&
+            ev.key.code == sf::Keyboard::Escape) {
+            if (m_cached_snap.game_won || m_cached_snap.game_lost) {
+                m_window.close();
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -372,6 +844,24 @@ void Renderer::render(const RenderSnapshot& snap) {
     m_window.clear(sf::Color(8, 10, 20));
     drawBackground();
     drawBattlefield(snap);
+
+    if (m_wave_banner_active) {
+        float alpha_f = 1.f;
+        const float TOTAL = 3.0f;
+        const float FADEIN = 0.3f;
+        const float FADEOUT = 0.4f;
+        if (m_wave_banner_t < FADEIN)
+            alpha_f = m_wave_banner_t / FADEIN;
+        else if (m_wave_banner_t > TOTAL - FADEOUT)
+            alpha_f = (TOTAL - m_wave_banner_t) / FADEOUT;
+        if (alpha_f < 0.f) alpha_f = 0.f;
+        if (alpha_f > 1.f) alpha_f = 1.f;
+        sf::Uint8 ov = (sf::Uint8)(120.f * alpha_f);
+        m_rect.setSize({m_win_w, m_win_h});
+        m_rect.setPosition(0.f, 0.f);
+        m_rect.setFillColor(sf::Color(0, 0, 0, ov));
+        m_window.draw(m_rect);
+    }
 
     // Floating weapon icons drawn on top of all cards
     drawFloatingWeapons();
@@ -841,6 +1331,18 @@ static void drawButton(sf::RenderWindow& win, sf::RectangleShape& rect,
     win.draw(text);
 }
 
+static int parseBracketIndex(const GuiButton& btn) {
+    const std::string& lbl = btn.label;
+    size_t open = lbl.find('[');
+    size_t close = lbl.find(']');
+    if (open != std::string::npos && close != std::string::npos && close > open) {
+        int idx = 0;
+        std::sscanf(lbl.c_str() + open + 1, "%d", &idx);
+        return idx;
+    }
+    return -1;
+}
+
 void Renderer::buildActionButtons(const RenderSnapshot::EntitySnap& actor) {
     m_action_buttons.clear();
     const float BW = 148.f, BH = 34.f, GAP = 6.f;
@@ -884,7 +1386,6 @@ void Renderer::buildTargetButtons(const RenderSnapshot& snap) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "[%d] %s  HP:%d", i, e.name, e.hp);
         auto btn = makeButton(MX, by, BW, BH, buf, true);
-        btn.bounds.left = (float)i;   // encode entity index
         m_target_buttons.push_back(btn);
         by += BH + GAP;
     }
@@ -903,7 +1404,6 @@ void Renderer::buildInventoryButtons(const RenderSnapshot::EntitySnap& actor) {
         std::snprintf(buf, sizeof(buf), "[%d] %s (slots:%d)", i,
                       slot.name, slot.slot_size);
         auto btn = makeButton(MX, by, BW, BH, buf, true);
-        btn.bounds.left = (float)i;
         m_inventory_buttons.push_back(btn);
         by += BH + GAP;
     }
@@ -924,7 +1424,6 @@ void Renderer::buildLongTermButtons(const RenderSnapshot::EntitySnap& actor) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "[%d] %s", i, slot.name);
         auto btn = makeButton(MX, by, BW, BH, buf, true);
-        btn.bounds.left = (float)i;
         m_longterm_buttons.push_back(btn);
         by += BH + GAP;
     }
@@ -1205,7 +1704,7 @@ void Renderer::drawVictoryScreen() {
     m_window.draw(m_text);
 
     // "Close window to exit" hint (dim)
-    m_text.setString("Close the window to exit.");
+    m_text.setString("Press ESC or close the window to exit.");
     m_text.setCharacterSize(18u);
     m_text.setFillColor(sf::Color(160, 160, 160, 200));
     m_text.setOutlineThickness(0.f);
@@ -1284,7 +1783,7 @@ void Renderer::drawGameOverScreen() {
     m_window.draw(m_text);
 
     // "Close window to exit"
-    m_text.setString("Close the window to exit.");
+    m_text.setString("Press ESC or close the window to exit.");
     m_text.setCharacterSize(18u);
     m_text.setFillColor(sf::Color(160, 100, 100, 200));
     m_text.setOutlineThickness(0.f);
@@ -1367,9 +1866,8 @@ void Renderer::handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap) {
         const float BW = 200.f, MX = m_win_w/2.f - BW/2.f;
         float by = 100.f;
         for (auto& btn : m_target_buttons) {
-            sf::FloatRect dr{MX, by, BW, 34.f};
-            if (dr.contains(mp)) {
-                int entity_idx = (int)btn.bounds.left;
+            if (btn.bounds.contains(mp)) {
+                int entity_idx = parseBracketIndex(btn);
                 // Preserve weapon_slot that was set in INVENTORY_SELECT phase
                 int saved_slot = m_pending_gui_action.weapon_slot;
                 m_pending_gui_action.ready       = true;
@@ -1404,9 +1902,8 @@ void Renderer::handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap) {
         const float BW = 230.f, MX = m_win_w/2.f - BW/2.f;
         float by = 100.f;
         for (auto& btn : m_inventory_buttons) {
-            sf::FloatRect dr{MX, by, BW, 34.f};
-            if (btn.enabled && dr.contains(mp)) {
-                m_pending_gui_action.weapon_slot = (int)btn.bounds.left;
+            if (btn.enabled && btn.bounds.contains(mp)) {
+                m_pending_gui_action.weapon_slot = parseBracketIndex(btn);
                 m_pending_action = ActionType::USE_WEAPON;
                 m_phase = InputPhase::TARGET_SELECT;
                 buildTargetButtons(snap);
@@ -1428,12 +1925,11 @@ void Renderer::handleMouseClick(sf::Vector2f mp, const RenderSnapshot& snap) {
         const float BW = 230.f, MX = m_win_w/2.f - BW/2.f;
         float by = 100.f;
         for (auto& btn : m_longterm_buttons) {
-            sf::FloatRect dr{MX, by, BW, 34.f};
-            if (btn.enabled && dr.contains(mp)) {
+            if (btn.enabled && btn.bounds.contains(mp)) {
                 m_pending_gui_action.ready       = true;
                 m_pending_gui_action.action      = ActionType::SWAP_IN;
                 m_pending_gui_action.target_idx  = -1;
-                m_pending_gui_action.weapon_slot = (int)btn.bounds.left;
+                m_pending_gui_action.weapon_slot = parseBracketIndex(btn);
                 m_phase = InputPhase::NONE;
                 return;
             }

@@ -384,6 +384,15 @@ static void spawnNextWave(GlobalState* state) {
         state->wave_number, spawned);
     appendLogUnsafe(state, msg);
     std::fprintf(stderr, "[WAVE] %s\n", msg);
+
+    // Release mutex before sleeping so the render thread can show the wave
+    // banner and fade transition without being blocked.
+    // The caller (checkGameConditions) holds global_mutex so we post it,
+    // sleep for the banner duration, then re-acquire before returning.
+    sem_post(&state->global_mutex);
+    struct timespec wave_pause = {3, 500000000L}; // 3.5 seconds for banner + fade
+    nanosleep(&wave_pause, nullptr);
+    sem_wait(&state->global_mutex);
 }
 
 // Main scheduling loop for stamina-driven entity turns.
@@ -709,7 +718,7 @@ void* renderThreadSFML(void* arg) {
     int  prev_hp   [MAX_ENTITIES] = {};
     bool prev_alive[MAX_ENTITIES] = {};
     bool prev_stunned[MAX_ENTITIES] = {};
-    int  prev_wave  = 1;
+    int  prev_wave  = 0;  // start at 0 so wave 1 banner fires on first frame
  
     {
         sem_wait(&state->global_mutex);
@@ -1386,20 +1395,28 @@ int main() {
     state->arbiter_pid = getpid();
     initSemaphores(state);
 
-    int roll_number;
-    int player_count;
-    std::cout << "Enter your Roll Number (as integer): ";
-    std::cin >> roll_number;
-    std::cout << "Enter number of player characters (1-4): ";
-    std::cin >> player_count;
-    if (player_count < 1 || player_count > 4) {
-        std::cerr << "Invalid player count. Must be between 1 and 4." << std::endl;
-        cleanupAndExit(state, -1, -1);
-    }
-
+    // Ask display mode first — if GUI, remaining questions go through the
+    // SFML login screen; if TUI, ask everything in the terminal as before.
     std::cout << "Choose display mode: 1) TUI (ncurses)  2) GUI (SFML): ";
     int display_mode;
     std::cin >> display_mode;
+
+    int roll_number  = 0;
+    int player_count = 1;
+
+    if (display_mode != 2) {
+        // ---- TUI path: ask in terminal ----
+        std::cout << "Enter your Roll Number (as integer): ";
+        std::cin >> roll_number;
+        std::cout << "Enter number of player characters (1-4): ";
+        std::cin >> player_count;
+        if (player_count < 1 || player_count > 4) {
+            std::cerr << "Invalid player count. Must be between 1 and 4." << std::endl;
+            cleanupAndExit(state, -1, -1);
+        }
+    }
+    // GUI path: roll_number and player_count will be filled by the login
+    // screen below, after the Renderer is created.
 
     initEntities(state, roll_number, player_count);
     appendLog(state, "Game initialized. Waiting for processes...");
@@ -1428,6 +1445,25 @@ int main() {
     if (display_mode == 2) {
         // SFML path — do NOT init ncurses
         g_tui_mode = false;
+
+        // Show the GUI login screen to collect roll number and player count.
+        // This runs in the main thread before any game threads start.
+        {
+            Renderer login_renderer("../assets", "Chrono Rift — Login");
+            LoginResult lr = login_renderer.runLoginScreen();
+            if (!lr.confirmed) {
+                // User closed the window without clicking PLAY
+                cleanupAndExit(state, -1, -1);
+            }
+            roll_number  = lr.roll_number;
+            player_count = lr.player_count;
+            // Re-initialise entities with the real roll number and player count
+            initEntities(state, roll_number, player_count);
+            appendLog(state, "Game initialised via GUI login. Starting...");
+        }
+        // login_renderer is destroyed here; the game renderer is created fresh
+        // inside renderThreadSFML below.
+
         pthread_create(&render_tid, nullptr, renderThreadSFML, state);
     } else {
         // TUI path — init ncurses exactly as it was before
