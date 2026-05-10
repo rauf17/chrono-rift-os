@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <semaphore.h>
 
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+
 // ---------------------------------------------------------------------------
 // captureSnapshot
 // ---------------------------------------------------------------------------
