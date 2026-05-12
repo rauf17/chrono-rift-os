@@ -1349,7 +1349,7 @@ void Renderer::drawStatusBar(const RenderSnapshot& snap) {
         drawText(msg, 12.f, sy + 10.f, kFontMd, C::WHITE);
     }
     if (snap.ultimate_active)
-        drawText("ULTIMATE ACTIVE", m_win_w - 400.f, sy + 10.f,
+        drawText("ULTIMATE ACTIVE", m_win_w - 230.f, sy + 10.f,
                  kFontMd, sf::Color(255, 220, 60, 255));
 
     // Wave indicator and kill counter
@@ -1620,7 +1620,7 @@ void Renderer::drawUltimateOverlay() {
     m_text.setFillColor(sf::Color(255,230,80,ba));
     m_text.setString("ULTIMATE ACTIVE");
     sf::FloatRect tb = m_text.getLocalBounds();
-    m_text.setPosition((m_win_w - tb.width)/2.f, 10.f);
+    m_text.setPosition(((m_win_w - tb.width)/2.f), 10.f);
     m_window.draw(m_text);
     m_sprites.drawStatusIcon(m_window, "ultimate",
                               {(m_win_w-40.f)/2.f-60.f, 8.f}, {28.f,28.f});

@@ -304,6 +304,53 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
     state->artifacts[2].is_free = true;
     state->artifacts[2].held_by = -1;
     std::memset(state->artifacts[2].waiting, 0, sizeof(state->artifacts[2].waiting));
+
+
+    //TESTING PURPOSES : TO SHOW ULTIMATE ABILITY TO THE TA.
+    
+    // Weapon solar;
+    // std::strncpy(solar.name, "Solar Core", sizeof(solar.name));
+    // solar.slot_size = 10;
+    // solar.damage = 95;
+    // solar.is_artifact = true;
+    // solar.occupied = true;
+    // placeWeapon(&state->entities[0], solar, 0);
+    // state->entities[0].holds_solar_core = true;
+
+    // Weapon lunar;
+    // std::strncpy(lunar.name, "Lunar Blade", sizeof(lunar.name));
+    // lunar.slot_size = 10;
+    // lunar.damage = 90;
+    // lunar.is_artifact = true;
+    // lunar.occupied = true;
+    // placeWeapon(&state->entities[0], lunar, 10);
+    // state->entities[0].holds_lunar_blade = true;
+
+    // // Mark artifacts as held in the artifact table
+    // state->artifacts[0].is_free = false;
+    // state->artifacts[0].held_by = 0;
+
+    // state->artifacts[1].is_free = false;
+    // state->artifacts[1].held_by = 0;
+
+    // // DEBUG: Give Player 1 some weapons in long-term storage for demo
+    // Weapon halberd;
+    // std::strncpy(halberd.name, "Iron Halberd", sizeof(halberd.name));
+    // halberd.slot_size = 7;
+    // halberd.damage = 55;
+    // halberd.is_artifact = false;
+    // halberd.occupied = true;
+
+    // Weapon dagger;
+    // std::strncpy(dagger.name, "Venom Dagger", sizeof(dagger.name));
+    // dagger.slot_size = 4;
+    // dagger.damage = 30;
+    // dagger.is_artifact = false;
+    // dagger.occupied = true;
+
+    // state->entities[0].long_term[0] = halberd;
+    // state->entities[0].long_term[1] = dagger;
+    // state->entities[0].long_term_count = 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -1420,7 +1467,6 @@ int main() {
         perror("sigaction failed");
         cleanupAndExit(state, -1, -1);
     }
-    // Partner B may add SIGUSR1 and SIGALRM handlers here later.
     struct sigaction sa_alrm{};
     sa_alrm.sa_handler = handleSIGALRM;
     sigemptyset(&sa_alrm.sa_mask);
