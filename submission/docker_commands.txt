@@ -1,15 +1,15 @@
 on your host:
 
-cd ~/chrono-rift-os
+xhost +local:
+
+
 sudo docker run -it --rm \
   -e DISPLAY=$DISPLAY \
+  -e XAUTHORITY=$XAUTHORITY \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v $HOME/.Xauthority:/root/.Xauthority \
   -v $(pwd):/app \
   chrono-rift-env
-
-
-
-
 
 
 Then inside the container:
