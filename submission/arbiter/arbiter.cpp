@@ -308,49 +308,49 @@ void initEntities(GlobalState* state, int roll_number, int player_count) {
 
     //TESTING PURPOSES : TO SHOW ULTIMATE ABILITY TO THE TA.
     
-    // Weapon solar;
-    // std::strncpy(solar.name, "Solar Core", sizeof(solar.name));
-    // solar.slot_size = 10;
-    // solar.damage = 95;
-    // solar.is_artifact = true;
-    // solar.occupied = true;
-    // placeWeapon(&state->entities[0], solar, 0);
-    // state->entities[0].holds_solar_core = true;
+    Weapon solar;
+    std::strncpy(solar.name, "Solar Core", sizeof(solar.name));
+    solar.slot_size = 10;
+    solar.damage = 95;
+    solar.is_artifact = true;
+    solar.occupied = true;
+    placeWeapon(&state->entities[0], solar, 0);
+    state->entities[0].holds_solar_core = true;
 
-    // Weapon lunar;
-    // std::strncpy(lunar.name, "Lunar Blade", sizeof(lunar.name));
-    // lunar.slot_size = 10;
-    // lunar.damage = 90;
-    // lunar.is_artifact = true;
-    // lunar.occupied = true;
-    // placeWeapon(&state->entities[0], lunar, 10);
-    // state->entities[0].holds_lunar_blade = true;
+    Weapon lunar;
+    std::strncpy(lunar.name, "Lunar Blade", sizeof(lunar.name));
+    lunar.slot_size = 10;
+    lunar.damage = 90;
+    lunar.is_artifact = true;
+    lunar.occupied = true;
+    placeWeapon(&state->entities[0], lunar, 10);
+    state->entities[0].holds_lunar_blade = true;
 
-    // // Mark artifacts as held in the artifact table
-    // state->artifacts[0].is_free = false;
-    // state->artifacts[0].held_by = 0;
+    // Mark artifacts as held in the artifact table
+    state->artifacts[0].is_free = false;
+    state->artifacts[0].held_by = 0;
 
-    // state->artifacts[1].is_free = false;
-    // state->artifacts[1].held_by = 0;
+    state->artifacts[1].is_free = false;
+    state->artifacts[1].held_by = 0;
 
-    // // DEBUG: Give Player 1 some weapons in long-term storage for demo
-    // Weapon halberd;
-    // std::strncpy(halberd.name, "Iron Halberd", sizeof(halberd.name));
-    // halberd.slot_size = 7;
-    // halberd.damage = 55;
-    // halberd.is_artifact = false;
-    // halberd.occupied = true;
+    // DEBUG: Give Player 1 some weapons in long-term storage for demo
+    Weapon halberd;
+    std::strncpy(halberd.name, "Iron Halberd", sizeof(halberd.name));
+    halberd.slot_size = 7;
+    halberd.damage = 55;
+    halberd.is_artifact = false;
+    halberd.occupied = true;
 
-    // Weapon dagger;
-    // std::strncpy(dagger.name, "Venom Dagger", sizeof(dagger.name));
-    // dagger.slot_size = 4;
-    // dagger.damage = 30;
-    // dagger.is_artifact = false;
-    // dagger.occupied = true;
+    Weapon dagger;
+    std::strncpy(dagger.name, "Venom Dagger", sizeof(dagger.name));
+    dagger.slot_size = 4;
+    dagger.damage = 30;
+    dagger.is_artifact = false;
+    dagger.occupied = true;
 
-    // state->entities[0].long_term[0] = halberd;
-    // state->entities[0].long_term[1] = dagger;
-    // state->entities[0].long_term_count = 2;
+    state->entities[0].long_term[0] = halberd;
+    state->entities[0].long_term[1] = dagger;
+    state->entities[0].long_term_count = 2;
 }
 
 // ---------------------------------------------------------------------------
